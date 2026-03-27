@@ -1,0 +1,2138 @@
+import {
+  startTransition,
+  useEffect,
+  useDeferredValue,
+  useMemo,
+  useState
+} from "react";
+
+const modules = [
+  {
+    id: "general",
+    tag: "Core",
+    title: "常见问题中枢",
+    label: "System Orbit",
+    description: "聚合更新、权限、网络和桌面服务异常。",
+    atmosphere:
+      "冷色轨道舱负责系统基础健康度，聚焦软件源、权限、服务和网络链路收敛。",
+    accent: "#73f5ff",
+    glow: "rgba(115, 245, 255, 0.48)",
+    secondary: "#9ef8d8",
+    position: { top: "14%", left: "17%" },
+    workflow: ["同步系统状态", "定位异常服务", "恢复软件源与缓存"],
+    quickPrompts: [
+      "deepin 25 软件源更新失败怎么排查？",
+      "UOS 桌面服务没有启动怎么办？",
+      "系统权限异常导致应用打不开怎么修复？"
+    ]
+  },
+  {
+    id: "printer",
+    tag: "Device",
+    title: "外设打印机连接",
+    label: "Printer Link",
+    description: "围绕 USB / 网络打印机完成发现、绑定与队列检测。",
+    atmosphere:
+      "近地对接舱用于处理打印机发现失败、脱机、任务卡队列以及标签机链路异常。",
+    accent: "#6dffb7",
+    glow: "rgba(109, 255, 183, 0.46)",
+    secondary: "#ceffd2",
+    position: { top: "16%", left: "78%" },
+    workflow: ["发现设备", "确认队列", "校准纸型与作业参数"],
+    quickPrompts: [
+      "USB 打印机能识别但打印队列卡住怎么办？",
+      "deepin 找不到外接打印机怎么处理？",
+      "网络打印机能 ping 通但打印失败，先查什么？"
+    ]
+  },
+  {
+    id: "driver",
+    tag: "Repair",
+    title: "驱动修复工位",
+    label: "Driver Forge",
+    description: "处理驱动配置、CUPS、依赖缺失和过滤链重建。",
+    atmosphere:
+      "橙色修复舱专注过滤链、驱动包、打印配置与介质参数的重建和校准。",
+    accent: "#ffb55e",
+    glow: "rgba(255, 181, 94, 0.46)",
+    secondary: "#ffe7af",
+    position: { top: "75%", left: "19%" },
+    workflow: ["识别损坏环节", "重装关键包", "重建打印队列"],
+    quickPrompts: [
+      "驱动装过了但打印配置失效怎么修？",
+      "CUPS 正常运行但打印参数不对怎么排查？",
+      "重装驱动后还是乱码打印，下一步做什么？"
+    ]
+  },
+  {
+    id: "sensor",
+    tag: "AI",
+    title: "感知问答台",
+    label: "Perception Deck",
+    description: "结合快照、链路与故障症状生成动态建议。",
+    atmosphere:
+      "总控桥接收系统版本、设备类型、连接方式和症状，汇总成更具体的修复路径。",
+    accent: "#ff7d6b",
+    glow: "rgba(255, 125, 107, 0.42)",
+    secondary: "#ffd6a5",
+    position: { top: "79%", left: "81%" },
+    workflow: ["采集快照", "匹配故障树", "输出修复建议与下一跳"],
+    quickPrompts: [
+      "根据当前快照帮我做一轮自动诊断。",
+      "打印驱动和纸张参数要一起怎么排？",
+      "我想把这个助手接文心模型，前端如何保留结构？"
+    ]
+  }
+];
+
+const knowledgeBase = {
+  general: [
+    {
+      title: "软件源 / 更新异常恢复",
+      keywords: ["更新", "软件源", "apt", "源", "仓库", "依赖"],
+      summary:
+        "先恢复包管理稳定性，再继续处理打印机驱动。系统依赖不健康时，后续驱动安装和打印过滤链经常连带失败。",
+      steps: [
+        "检查网络、DNS、时间同步，避免 TLS 和仓库签名错误。",
+        "执行 `sudo apt update`，确认是源不可达、GPG 错误还是依赖断裂。",
+        "若存在损坏依赖，先用 `sudo apt --fix-broken install` 和 `sudo dpkg --configure -a` 收敛状态。"
+      ],
+      commands: [
+        "ping -c 3 mirrors.aliyun.com",
+        "timedatectl status",
+        "sudo apt update",
+        "sudo apt --fix-broken install",
+        "sudo dpkg --configure -a"
+      ],
+      nextAction: "系统更新恢复后，再切到“驱动修复工位”重装打印组件。"
+    },
+    {
+      title: "服务与权限异常恢复",
+      keywords: ["权限", "服务", "打不开", "托盘", "启动", "桌面"],
+      summary:
+        "桌面服务或权限异常会让打印管理器、系统设置页和设备发现流程表现失真，应该先修复基础服务。",
+      steps: [
+        "检查当前用户会话是否完整、关键守护进程是否崩溃。",
+        "验证 CUPS、accountsservice、dbus 等基础服务状态。",
+        "若是权限损坏，优先检查用户组、设备节点和家目录 ACL。"
+      ],
+      commands: [
+        "systemctl --user status",
+        "systemctl status cups",
+        "groups",
+        "ls -l /dev/usb",
+        "journalctl -b -p warning --no-pager"
+      ],
+      nextAction: "基础服务恢复正常后，再继续进入打印机链路排查。"
+    }
+  ],
+  printer: [
+    {
+      title: "USB / 网络打印机发现失败",
+      keywords: ["找不到", "无法识别", "识别", "发现", "usb", "网络打印机", "脱机"],
+      summary:
+        "先确认设备层是否被系统识别，再决定是 CUPS 队列问题还是厂商驱动问题。链路没有打通时，重装驱动通常无效。",
+      steps: [
+        "USB 设备优先看 `lsusb` 和 `dmesg`，网络设备优先看 `ping` 和 `lpinfo -v`。",
+        "确认 `cups` 服务在线，打印队列没有处于 paused 或 stopped。",
+        "特殊介质打印场景下，设备型号、纸张参数和驱动配置必须一致。"
+      ],
+      commands: [
+        "lsusb",
+        "dmesg | tail -n 40",
+        "lpinfo -v",
+        "lpstat -t",
+        "systemctl status cups"
+      ],
+      nextAction: "如果链路已经看得到设备，但打印仍失败，就切到“驱动修复工位”。"
+    },
+    {
+      title: "打印队列卡住 / 作业不出纸",
+      keywords: ["队列", "卡住", "挂起", "不打印", "job", "paused", "stopped"],
+      summary:
+        "多数卡队列问题不是硬件坏，而是队列被暂停、纸宽参数不匹配，或者上一次失败作业没有清掉。",
+      steps: [
+        "先看 `lpstat -t`，确认队列是否 paused、filter failed 或 stopped。",
+        "清空旧作业并重启 `cups`，避免坏任务持续阻塞。",
+        "重新核对默认纸张、标签宽度和设备 URI。"
+      ],
+      commands: [
+        "lpstat -t",
+        "cancel -a",
+        "sudo systemctl restart cups",
+        "lpoptions -p printer_name -l",
+        "journalctl -u cups --since '15 min ago'"
+      ],
+      nextAction: "如果队列恢复后仍报 filter failed，进一步处理驱动和过滤链。"
+    }
+  ],
+  driver: [
+    {
+      title: "驱动配置损坏 / 驱动不匹配修复",
+      keywords: ["驱动", "ppd", "纸宽", "乱码", "filter failed", "重装", "配置"],
+      summary:
+        "打印驱动异常里最常见的是驱动配置漂移、过滤链损坏，或者驱动包升级后没有同步队列配置。",
+      steps: [
+        "确认当前打印队列绑定的配置和设备型号一致，避免误用相邻驱动。",
+        "检查厂商驱动包或通用驱动是否完整安装，依赖是否断裂。",
+        "必要时删除旧队列，重装驱动后重新创建队列。"
+      ],
+      commands: [
+        "lpstat -p -d",
+        "lpoptions -p printer_name -l",
+        "dpkg -l | grep -Ei 'brother|cups|printer'",
+        "sudo apt reinstall cups printer-driver-all",
+        "sudo lpadmin -x printer_name"
+      ],
+      nextAction: "删除旧队列后重新建队列，再用测试页回归纸张和边距。"
+    },
+    {
+      title: "CUPS 过滤链异常恢复",
+      keywords: ["cups", "过滤", "过滤器", "backend", "崩溃", "后台"],
+      summary:
+        "如果 `cupsd` 正常但过滤链挂了，需要把问题收敛到后端、滤镜还是权限，而不是盲目重装全部软件。",
+      steps: [
+        "查看 `journalctl -u cups` 和 `/var/log/cups/error_log`，确认失败点。",
+        "检查 `/usr/lib/cups/filter`、`/usr/lib/cups/backend` 中的执行权限。",
+        "必要时重装 CUPS 和后端驱动，再回填打印队列。"
+      ],
+      commands: [
+        "journalctl -u cups --since '30 min ago'",
+        "sudo tail -n 60 /var/log/cups/error_log",
+        "ls -l /usr/lib/cups/filter",
+        "ls -l /usr/lib/cups/backend",
+        "sudo systemctl restart cups"
+      ],
+      nextAction: "过滤链恢复后，再回到打印链路做一次端到端测试。"
+    }
+  ],
+  sensor: [
+    {
+      title: "感知输入驱动的自动诊断",
+      keywords: ["感知", "自动", "诊断", "快照", "根据当前", "agent", "模型"],
+      summary:
+        "这里会综合系统版本、连接类型、设备类型和故障症状，把建议压缩成具体操作流，后续可以直接接入文心或本地执行器。",
+      steps: [
+        "先收集快照：deepin / UOS 版本、设备类型、连接方式、故障表现。",
+        "根据快照匹配故障树，并把当前场景路由到基础、链路或驱动模块。",
+        "输出下一跳建议，必要时升级为可执行脚本或模型问答。"
+      ],
+      commands: [
+        "cat /etc/os-release",
+        "lsusb",
+        "lpinfo -v",
+        "lpstat -t",
+        "journalctl -u cups --since '10 min ago'"
+      ],
+      nextAction: "后续把这层替换成真实模型接口时，前端结构不需要重写。"
+    }
+  ]
+};
+
+const snapshotOptions = {
+  distro: ["deepin 25", "deepin 23.1", "UOS 1070", "deepin V23 Preview"],
+  device: ["USB 打印机", "标签打印机", "激光打印机", "网络打印机", "网络一体机"],
+  connection: ["USB", "Network", "Virtual Queue"],
+  symptom: ["无法识别设备", "打印队列卡住", "驱动 / 过滤链异常", "纸宽或输出异常"]
+};
+
+const initialSnapshot = {
+  distro: "deepin 25",
+  device: "USB 打印机",
+  connection: "USB",
+  symptom: "打印队列卡住"
+};
+
+const pipelineStages = [
+  { id: "sense", title: "设备感知", detail: "枚举设备、读取系统快照" },
+  { id: "link", title: "链路确认", detail: "确认 USB / 网络 URI 与服务状态" },
+  { id: "queue", title: "队列校验", detail: "检查 paused、旧作业和队列锁" },
+  { id: "driver", title: "驱动修复", detail: "修复 PPD、过滤链和驱动依赖" },
+  { id: "verify", title: "结果验证", detail: "测试打印、纸宽和边距回归" }
+];
+
+const symptomProfiles = {
+  无法识别设备: {
+    score: 42,
+    severity: "critical",
+    lane: "sense",
+    toneSummary: "优先恢复设备枚举和链路可见性。",
+    riskTags: ["设备未枚举", "链路失联", "禁止盲目重装驱动"]
+  },
+  打印队列卡住: {
+    score: 63,
+    severity: "warning",
+    lane: "queue",
+    toneSummary: "链路大概率已经存在，先清理队列和作业阻塞。",
+    riskTags: ["队列阻塞", "旧作业堆积", "标签宽度可能漂移"]
+  },
+  "驱动 / 过滤链异常": {
+    score: 51,
+    severity: "critical",
+    lane: "driver",
+    toneSummary: "当前症状集中在驱动栈和过滤链，应该直接进入重建流程。",
+    riskTags: ["驱动配置漂移", "过滤链损坏", "驱动依赖断裂"]
+  },
+  "纸宽或输出异常": {
+    score: 72,
+    severity: "warning",
+    lane: "verify",
+    toneSummary: "主要风险在输出参数和介质配置，需要回归纸宽与边距。",
+    riskTags: ["纸宽不匹配", "边距异常", "输出模板错配"]
+  }
+};
+
+const severityMeta = {
+  critical: {
+    label: "Critical",
+    summary: "底层链路或驱动不稳定，继续操作前应先收敛关键故障。"
+  },
+  warning: {
+    label: "Warning",
+    summary: "存在明显异常，但修复路径已经较清晰。"
+  },
+  stable: {
+    label: "Stable",
+    summary: "整体链路可控，主要是参数和验证层问题。"
+  }
+};
+
+const connectionProfiles = {
+  USB: {
+    health: 82,
+    note: "本地直连，优先看 lsusb / dmesg 与设备节点。",
+    uri: "usb://printer/device"
+  },
+  Network: {
+    health: 69,
+    note: "先确认 IP 可达、端口与协议 URI 正确。",
+    uri: "socket://192.168.1.80"
+  },
+  "Virtual Queue": {
+    health: 58,
+    note: "虚拟队列适合测试，但真实设备映射容易漂移。",
+    uri: "ipp://localhost/printers/virtual"
+  }
+};
+
+const deviceProfiles = {
+  "USB 打印机": {
+    model: "USB printer",
+    stack: "Vendor driver or generic printer stack",
+    note: "重点核对 USB 枚举、设备节点和队列配置。"
+  },
+  标签打印机: {
+    model: "Label printer",
+    stack: "Vendor driver + CUPS + label media profile",
+    note: "重点核对介质宽度、边距和驱动参数。"
+  },
+  激光打印机: {
+    model: "LaserJet class printer",
+    stack: "PCL / generic printer driver",
+    note: "重点核对驱动后端和网络 URI。"
+  },
+  网络打印机: {
+    model: "Network printer",
+    stack: "IPP / socket printer stack",
+    note: "重点核对 IP 可达、协议和队列绑定。"
+  },
+  网络一体机: {
+    model: "Network MFP",
+    stack: "IPP / socket + scan / print service",
+    note: "需要区分打印协议和扫描协议状态。"
+  }
+};
+
+const distroProfiles = {
+  "deepin 25": {
+    commandFamily: "apt + systemd + CUPS",
+    note: "适合作为活动演示环境。"
+  },
+  "deepin 23.1": {
+    commandFamily: "apt + systemd + CUPS",
+    note: "适合作为本机诊断和原型调试环境。"
+  },
+  "UOS 1070": {
+    commandFamily: "apt + enterprise desktop stack",
+    note: "更关注桌面服务和企业镜像差异。"
+  },
+  "deepin V23 Preview": {
+    commandFamily: "preview packages + rolling components",
+    note: "需要额外注意版本漂移和兼容性。"
+  }
+};
+
+const moduleMap = Object.fromEntries(modules.map((item) => [item.id, item]));
+const API_BASE = import.meta.env.DEV ? "" : "http://127.0.0.1:4174";
+
+function flattenFlows() {
+  return Object.entries(knowledgeBase).flatMap(([moduleId, flows]) =>
+    flows.map((flow) => ({ ...flow, moduleId }))
+  );
+}
+
+function findBestFlow(question, preferredModuleId) {
+  const normalized = question.trim().toLowerCase();
+  const candidateFlows = [
+    ...(knowledgeBase[preferredModuleId] || []).map((flow) => ({
+      ...flow,
+      moduleId: preferredModuleId
+    })),
+    ...flattenFlows()
+  ];
+
+  let bestMatch = candidateFlows[0];
+  let bestScore = -1;
+
+  candidateFlows.forEach((flow) => {
+    const score = flow.keywords.reduce((total, keyword) => {
+      return normalized.includes(keyword.toLowerCase()) ? total + 1 : total;
+    }, 0);
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestMatch = flow;
+    }
+  });
+
+  return bestScore > 0 ? bestMatch : candidateFlows[0];
+}
+
+function clampScore(score) {
+  return Math.max(22, Math.min(96, score));
+}
+
+function buildHealth(snapshot, moduleId) {
+  const symptomProfile = symptomProfiles[snapshot.symptom];
+  const severityKey = symptomProfile?.severity || "stable";
+  const meta = severityMeta[severityKey];
+
+  let score = symptomProfile?.score ?? 78;
+
+  if (snapshot.connection === "Virtual Queue") {
+    score -= 6;
+  }
+
+  if (snapshot.device === "标签打印机" && snapshot.symptom === "驱动 / 过滤链异常") {
+    score -= 4;
+  }
+
+  if (moduleId === "sensor") {
+    score += 2;
+  }
+
+  if (snapshot.symptom === "纸宽或输出异常" && moduleId === "driver") {
+    score -= 3;
+  }
+
+  return {
+    score: clampScore(score),
+    severity: severityKey,
+    severityLabel: meta.label,
+    severitySummary: meta.summary,
+    toneSummary: symptomProfile?.toneSummary || meta.summary
+  };
+}
+
+function buildContext(snapshot) {
+  return `当前感知快照：${snapshot.distro} / ${snapshot.device} / ${snapshot.connection} / ${snapshot.symptom}。`;
+}
+
+function buildAdaptiveHint(snapshot) {
+  if (snapshot.connection === "USB" && snapshot.symptom === "无法识别设备") {
+    return "优先看 USB 枚举、设备节点和 `dmesg`，不要先急着重装驱动。";
+  }
+
+  if (snapshot.connection === "USB" && snapshot.symptom === "打印队列卡住") {
+    return "链路已经大概率存在，优先检查队列状态、旧作业和标签纸宽参数。";
+  }
+
+  if (snapshot.symptom === "驱动 / 过滤链异常") {
+    return "当前症状更像驱动栈损坏，建议直接进入驱动 / CUPS 重建流程。";
+  }
+
+  if (snapshot.connection === "Network") {
+    return "网络设备先验证 IP 可达、协议 URI 与队列绑定，再看驱动。";
+  }
+
+  return "先把故障收敛到链路、队列或驱动三层，避免重复操作。";
+}
+
+function buildSignalDeck(snapshot) {
+  const connection =
+    connectionProfiles[snapshot.connection] || connectionProfiles.USB;
+  const device =
+    deviceProfiles[snapshot.device] || deviceProfiles["USB 打印机"];
+  const distro = distroProfiles[snapshot.distro] || distroProfiles["deepin 25"];
+  const health = buildHealth(snapshot, "sensor");
+
+  const queueHealth =
+    snapshot.symptom === "打印队列卡住"
+      ? 34
+      : snapshot.symptom === "无法识别设备"
+        ? 61
+        : snapshot.symptom === "驱动 / 过滤链异常"
+          ? 48
+          : 73;
+
+  const driverIntegrity =
+    snapshot.symptom === "驱动 / 过滤链异常"
+      ? 29
+      : snapshot.symptom === "纸宽或输出异常"
+        ? 58
+        : 76;
+
+  return [
+    {
+      label: "OS Stack",
+      value: distro.commandFamily,
+      percent: health.score,
+      tone: health.severity === "critical" ? "warning" : "stable",
+      detail: distro.note
+    },
+    {
+      label: "Device Link",
+      value: snapshot.connection,
+      percent: connection.health,
+      tone: connection.health >= 75 ? "stable" : "warning",
+      detail: connection.note
+    },
+    {
+      label: "Queue Health",
+      value: queueHealth >= 60 ? "Recoverable" : "Blocked",
+      percent: queueHealth,
+      tone: queueHealth < 40 ? "critical" : "warning",
+      detail: "关注 paused、旧作业堆积和 filter failed。"
+    },
+    {
+      label: "Driver Integrity",
+      value: device.model,
+      percent: driverIntegrity,
+      tone: driverIntegrity < 40 ? "critical" : "warning",
+      detail: device.note
+    }
+  ];
+}
+
+function buildStageRail(snapshot) {
+  const lane = symptomProfiles[snapshot.symptom]?.lane ?? "verify";
+  const activeIndex = pipelineStages.findIndex((stage) => stage.id === lane);
+
+  return pipelineStages.map((stage, index) => ({
+    ...stage,
+    state:
+      index < activeIndex ? "done" : index === activeIndex ? "active" : "queued"
+  }));
+}
+
+function buildOpsBoard(snapshot, flow) {
+  const connection =
+    connectionProfiles[snapshot.connection] || connectionProfiles.USB;
+  const device =
+    deviceProfiles[snapshot.device] || deviceProfiles["USB 打印机"];
+  const distro = distroProfiles[snapshot.distro] || distroProfiles["deepin 25"];
+
+  return [
+    {
+      title: "系统底座",
+      value: snapshot.distro,
+      detail: `${distro.commandFamily} · ${distro.note}`
+    },
+    {
+      title: "设备画像",
+      value: snapshot.device,
+      detail: `${device.model} · ${device.stack}`
+    },
+    {
+      title: "打印 URI",
+      value: connection.uri,
+      detail: "后续可直接映射到 CUPS 队列配置。"
+    },
+    {
+      title: "建议路径",
+      value: flow.title,
+      detail: "当前问答已自动匹配到最接近的故障树分支。"
+    }
+  ];
+}
+
+function buildActionPlan(flow, snapshot) {
+  return [
+    {
+      title: "采集现场快照",
+      owner: "Probe",
+      timing: "Now",
+      detail: `读取 ${snapshot.distro}、${snapshot.connection} 和 ${snapshot.device} 的当前状态，确认症状是否与输入一致。`,
+      command: flow.commands[0]
+    },
+    {
+      title: "执行关键修复",
+      owner: "Repair",
+      timing: "Next",
+      detail: flow.steps[1] || flow.steps[0],
+      command: flow.commands[2] || flow.commands[1] || flow.commands[0]
+    },
+    {
+      title: "回归验证输出",
+      owner: "Verify",
+      timing: "Then",
+      detail: flow.nextAction,
+      command: flow.commands[flow.commands.length - 1]
+    }
+  ];
+}
+
+function buildSceneIntel(snapshot, moduleId) {
+  const health = buildHealth(snapshot, moduleId);
+  const device =
+    deviceProfiles[snapshot.device] || deviceProfiles["USB 打印机"];
+  const route = symptomProfiles[snapshot.symptom];
+
+  return [
+    {
+      label: "Mission Score",
+      value: `${health.score}%`,
+      detail: health.toneSummary
+    },
+    {
+      label: "Device",
+      value: device.model,
+      detail: device.note
+    },
+    {
+      label: "Fault Vector",
+      value: snapshot.symptom,
+      detail: route?.riskTags?.[0] || "系统状态稳定"
+    },
+    {
+      label: "Active Lane",
+      value: pipelineStages.find((item) => item.id === route?.lane)?.title || "结果验证",
+      detail: "悬停不同模块时，左侧场景和这里的重点都会联动变化。"
+    }
+  ];
+}
+
+function mergeSnapshotWithDiagnostics(previous, diagnostics) {
+  const nextSnapshot = { ...previous };
+  const { inference } = diagnostics;
+
+  if (snapshotOptions.distro.includes(inference.distro)) {
+    nextSnapshot.distro = inference.distro;
+  }
+
+  if (snapshotOptions.device.includes(inference.device)) {
+    nextSnapshot.device = inference.device;
+  }
+
+  if (snapshotOptions.connection.includes(inference.connection)) {
+    nextSnapshot.connection = inference.connection;
+  }
+
+  if (snapshotOptions.symptom.includes(inference.symptom)) {
+    nextSnapshot.symptom = inference.symptom;
+  }
+
+  return nextSnapshot;
+}
+
+function formatProbeTime(value) {
+  return new Date(value).toLocaleString("zh-CN", {
+    hour12: false
+  });
+}
+
+async function fetchJson(url, options) {
+  const response = await fetch(url, options);
+  const payload = await response.json();
+
+  if (!response.ok || !payload.ok) {
+    throw new Error(payload.error || "Request failed");
+  }
+
+  return payload;
+}
+
+function riskTone(risk) {
+  if (risk === "privileged") {
+    return "critical";
+  }
+
+  if (risk === "moderate") {
+    return "warning";
+  }
+
+  return "stable";
+}
+
+function riskLabel(risk) {
+  if (risk === "privileged") {
+    return "Privileged";
+  }
+
+  if (risk === "moderate") {
+    return "Moderate";
+  }
+
+  return "Safe";
+}
+
+function authorizationTone(status) {
+  if (status === "interactive") {
+    return "warning";
+  }
+
+  if (status === "unavailable") {
+    return "critical";
+  }
+
+  return "stable";
+}
+
+function authorizationLabel(status) {
+  if (status === "granted") {
+    return "API 就绪";
+  }
+
+  if (status === "interactive") {
+    return "需授权";
+  }
+
+  if (status === "unavailable") {
+    return "手动";
+  }
+
+  return "直连";
+}
+
+function executionTone(state, ok) {
+  if (state === "blocked" || state === "skipped") {
+    return "warning";
+  }
+
+  if (state === "failed" || ok === false) {
+    return "critical";
+  }
+
+  return "stable";
+}
+
+function executionLabel(state, mode) {
+  if (state === "completed") {
+    return "完成";
+  }
+
+  if (state === "blocked") {
+    return "待授权";
+  }
+
+  if (state === "skipped") {
+    return "跳过";
+  }
+
+  if (state === "failed") {
+    return "失败";
+  }
+
+  return mode === "run" ? "执行" : "预览";
+}
+
+function privilegeMethodLabel(method) {
+  if (method === "direct") {
+    return "direct";
+  }
+
+  if (method === "pkexec") {
+    return "pkexec";
+  }
+
+  if (method === "sudo-nopasswd") {
+    return "sudo -n";
+  }
+
+  if (method === "sudo-password") {
+    return "sudo password";
+  }
+
+  return "manual";
+}
+
+function actionRunLabel(action, isBusy, mode) {
+  if (isBusy && mode === "run") {
+    return "执行中...";
+  }
+
+  if (action.authorization?.status === "interactive") {
+    return "授权执行";
+  }
+
+  if (action.authorization?.status === "unavailable") {
+    return "导出脚本";
+  }
+
+  return "执行";
+}
+
+function manualExecutionTone(status) {
+  if (status === "completed") {
+    return "stable";
+  }
+
+  if (status === "failed") {
+    return "critical";
+  }
+
+  return "warning";
+}
+
+function manualExecutionLabel(status) {
+  if (status === "completed") {
+    return "已回填";
+  }
+
+  if (status === "failed") {
+    return "执行失败";
+  }
+
+  return "等待回执";
+}
+
+function timelineTone(status) {
+  if (status === "error") {
+    return "critical";
+  }
+
+  if (status === "warning" || status === "skip" || status === "blocked") {
+    return "warning";
+  }
+
+  return "stable";
+}
+
+function timelineLabel(status) {
+  if (status === "queued") {
+    return "queued";
+  }
+
+  if (status === "preview") {
+    return "preview";
+  }
+
+  if (status === "skip") {
+    return "skip";
+  }
+
+  if (status === "blocked") {
+    return "blocked";
+  }
+
+  return status;
+}
+
+function createResponse(question, activeModule, snapshot) {
+  const bestFlow = findBestFlow(question, activeModule.id);
+  const targetModule = moduleMap[bestFlow.moduleId];
+  const health = buildHealth(snapshot, targetModule.id);
+  const symptom = symptomProfiles[snapshot.symptom];
+
+  return {
+    moduleName: targetModule.title,
+    label: targetModule.label,
+    title: bestFlow.title,
+    summary: bestFlow.summary,
+    context: buildContext(snapshot),
+    adaptiveHint: buildAdaptiveHint(snapshot),
+    steps: bestFlow.steps,
+    commands: bestFlow.commands,
+    nextAction: bestFlow.nextAction,
+    severity: health.severity,
+    severityLabel: health.severityLabel,
+    severitySummary: health.severitySummary,
+    score: health.score,
+    riskTags: [
+      snapshot.device,
+      snapshot.connection,
+      ...(symptom?.riskTags || [])
+    ].slice(0, 4),
+    stageRail: buildStageRail(snapshot),
+    actionPlan: buildActionPlan(bestFlow, snapshot),
+    opsBoard: buildOpsBoard(snapshot, bestFlow)
+  };
+}
+
+function SeverityDial({ score, severityLabel, summary, tone }) {
+  return (
+    <article className={`severity-dial is-${tone}`}>
+      <div className="severity-dial__ring">
+        <strong>{score}</strong>
+        <span>Health</span>
+      </div>
+      <div className="severity-dial__copy">
+        <p className="eyebrow">Mission health</p>
+        <h3>{severityLabel}</h3>
+        <p>{summary}</p>
+      </div>
+    </article>
+  );
+}
+
+function StageRail({ stages }) {
+  return (
+    <div className="stage-rail">
+      {stages.map((stage) => (
+        <article
+          key={stage.id}
+          className={`stage-rail__item is-${stage.state}`}
+        >
+          <span />
+          <strong>{stage.title}</strong>
+          <small>{stage.detail}</small>
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function LiveProbePanel({ probe, onRefresh }) {
+  const isLoading = probe.status === "loading";
+
+  return (
+    <section className="live-probe">
+      <div className="live-probe__head">
+        <div>
+          <p className="eyebrow">Live Probe</p>
+          <h3>本机实时诊断</h3>
+        </div>
+
+        <button
+          type="button"
+          className="copy-button"
+          disabled={isLoading}
+          onClick={() => onRefresh()}
+        >
+          {isLoading ? "采集中..." : "采集真实快照"}
+        </button>
+      </div>
+
+      {probe.error ? <p className="probe-error">{probe.error}</p> : null}
+
+      {probe.data ? (
+        <>
+          <div className="live-probe__grid">
+            <article className="probe-card">
+              <span>Host</span>
+              <strong>{probe.data.host.hostname}</strong>
+              <small>
+                {probe.data.system.prettyName} · {probe.data.system.kernel}
+              </small>
+            </article>
+
+            <article className="probe-card">
+              <span>Network</span>
+              <strong>{probe.data.network.online ? "online" : "offline"}</strong>
+              <small>{probe.data.network.summary}</small>
+            </article>
+
+            <article className="probe-card">
+              <span>Resources</span>
+              <strong>{probe.data.resources.storage.usePercent}</strong>
+              <small>
+                Memory {probe.data.resources.memory.used} / {probe.data.resources.memory.total}
+              </small>
+            </article>
+
+            <article className="probe-card">
+              <span>CUPS</span>
+              <strong>{probe.data.services.cupsActive}</strong>
+              <small>
+                enabled: {probe.data.services.cupsEnabled || "unknown"} · failed units:{" "}
+                {probe.data.services.failedUnits.count}
+              </small>
+            </article>
+
+            <article className="probe-card">
+              <span>Queue</span>
+              <strong>{probe.data.printers.summary}</strong>
+              <small>
+                default: {probe.data.printers.defaultPrinter || "未设置"}
+              </small>
+            </article>
+
+            <article className="probe-card">
+              <span>Inference</span>
+              <strong>{probe.data.inference.symptom}</strong>
+              <small>{probe.data.inference.note}</small>
+            </article>
+          </div>
+
+          <div className="probe-status">
+            <div>
+              <span>连接方式</span>
+              <strong>{probe.data.inference.connection || "未确定"}</strong>
+            </div>
+            <div>
+              <span>设备类型</span>
+              <strong>{probe.data.inference.device || "未识别设备"}</strong>
+            </div>
+            <div>
+              <span>检测时间</span>
+              <strong>{formatProbeTime(probe.data.timestamp)}</strong>
+            </div>
+            <div>
+              <span>USB 设备数</span>
+              <strong>{probe.data.usb.deviceCount}</strong>
+            </div>
+            <div>
+              <span>失败服务数</span>
+              <strong>{probe.data.services.failedUnits.count}</strong>
+            </div>
+          </div>
+
+          <div className="probe-recommendations">
+            <span>建议优先执行</span>
+            <div className="probe-command-list">
+              {probe.data.recommendations.map((item) => (
+                <code key={item}>{item}</code>
+              ))}
+            </div>
+          </div>
+
+          <details className="probe-details">
+            <summary>查看采集详情</summary>
+            <div className="probe-details__grid">
+              {probe.data.commands.map((item) => (
+                <article key={item.name} className="probe-command">
+                  <div className="probe-command__head">
+                    <strong>{item.name}</strong>
+                    <span className={`tone-pill is-${item.ok ? "stable" : "critical"}`}>
+                      {item.ok ? "ok" : "error"}
+                    </span>
+                  </div>
+                  <code>{item.command}</code>
+                  <pre>{item.preview.join("\n") || item.stderr || "No output"}</pre>
+                </article>
+              ))}
+            </div>
+          </details>
+        </>
+      ) : (
+        <p className="probe-empty">
+          还没有采集到真实系统数据。点击“采集真实快照”后，前端会读取本机
+          `os-release`、`lpstat`、`lpinfo`、`lsusb` 和 CUPS 日志。
+        </p>
+      )}
+    </section>
+  );
+}
+
+function ActionConsole({
+  actions,
+  actionEnvironment,
+  actionState,
+  actionHistory,
+  copiedId,
+  onPreview,
+  onRun,
+  onCopyText,
+  onCheckManualExecution
+}) {
+  return (
+    <section className="action-console">
+      <div className="action-console__head">
+        <div>
+          <p className="eyebrow">Action Console</p>
+          <h3>执行控制台</h3>
+        </div>
+        <div className="tag-row">
+          <span className="tag-pill">支持包</span>
+          <span className="tag-pill">工单导出</span>
+          <span className="tag-pill">修复动作预览</span>
+        </div>
+      </div>
+
+      {actionEnvironment ? (
+        <div className="action-console__environment">
+          <div className="tag-row">
+            <span className="tag-pill">账号 {actionEnvironment.user}</span>
+            <span className="tag-pill">{actionEnvironment.sessionType}</span>
+            <span className="tag-pill">
+              {actionEnvironment.availableMethods?.length
+                ? actionEnvironment.availableMethods
+                    .map((item) => privilegeMethodLabel(item))
+                    .join(" / ")
+                : "manual"}
+            </span>
+          </div>
+          <p className="action-console__hint">{actionEnvironment.summary}</p>
+        </div>
+      ) : null}
+
+      {actionState.error ? <p className="probe-error">{actionState.error}</p> : null}
+
+      <div className="action-console__grid">
+        {actions.map((action) => {
+          const tone = riskTone(action.risk);
+          const isBusy = actionState.loading && actionState.activeId === action.id;
+
+          return (
+            <article key={action.id} className="action-tile">
+              <div className="action-tile__head">
+                <strong>{action.title}</strong>
+                <span className={`tone-pill is-${tone}`}>{riskLabel(action.risk)}</span>
+              </div>
+
+              <p>{action.description}</p>
+
+              <div className="tag-row">
+                <span className="tag-pill">{action.module}</span>
+                {action.requiresRoot ? <span className="tag-pill">needs root</span> : null}
+              </div>
+
+              {action.authorization ? (
+                <div className="action-auth">
+                  <div className="action-auth__head">
+                    <strong>权限状态</strong>
+                    <span
+                      className={`tone-pill is-${authorizationTone(
+                        action.authorization.status
+                      )}`}
+                    >
+                      {authorizationLabel(action.authorization.status)}
+                    </span>
+                  </div>
+                  <p>{action.authorization.summary}</p>
+                </div>
+              ) : null}
+
+              <ul className="action-preview">
+                {action.previewCommands.map((item) => (
+                  <li key={item}>
+                    <code>{item}</code>
+                  </li>
+                ))}
+              </ul>
+
+              <div className="action-tile__buttons">
+                <button
+                  type="button"
+                  className="copy-button"
+                  disabled={actionState.loading}
+                  onClick={() => onPreview(action.id)}
+                >
+                  {isBusy && actionState.mode === "preview" ? "预览中..." : "预览"}
+                </button>
+                <button
+                  type="button"
+                  className="action-run"
+                  disabled={actionState.loading}
+                  onClick={() => onRun(action.id)}
+                >
+                  {actionRunLabel(action, isBusy, actionState.mode)}
+                </button>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+
+      {actionState.result ? (
+        <article className="action-result">
+          <div className="action-result__head">
+            <div>
+              <p className="eyebrow">Last Action</p>
+              <h3>{actionState.result.action.title}</h3>
+            </div>
+            <div className="tag-row">
+              <span
+                className={`tone-pill is-${executionTone(
+                  actionState.result.state,
+                  actionState.result.ok
+                )}`}
+              >
+                {executionLabel(actionState.result.state, actionState.result.mode)}
+              </span>
+              <span className={`tone-pill is-${riskTone(actionState.result.action.risk)}`}>
+                {riskLabel(actionState.result.action.risk)}
+              </span>
+            </div>
+          </div>
+
+          <p className="action-result__summary">{actionState.result.summary}</p>
+
+          {actionState.result.warnings?.length ? (
+            <div className="action-result__block">
+              <h4>注意事项</h4>
+              <ul>
+                {actionState.result.warnings.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          {actionState.result.timeline?.length ? (
+            <div className="action-result__block">
+              <h4>执行时间线</h4>
+              <div className="timeline-list">
+                {actionState.result.timeline.map((item, index) => (
+                  <article key={`${item.at}-${index}`} className="timeline-item">
+                    <div className="timeline-item__meta">
+                      <span className={`tone-pill is-${timelineTone(item.status)}`}>
+                        {timelineLabel(item.status)}
+                      </span>
+                      <strong>{formatProbeTime(item.at)}</strong>
+                    </div>
+                    <p className="timeline-item__title">{item.title}</p>
+                    <small>{item.detail}</small>
+                  </article>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {actionState.result.authorization ? (
+            <div className="action-result__block">
+              <h4>授权状态</h4>
+              <div className="action-auth action-auth--result">
+                <div className="action-auth__head">
+                  <strong>{actionState.result.authorization.summary}</strong>
+                  <span
+                    className={`tone-pill is-${authorizationTone(
+                      actionState.result.authorization.status
+                    )}`}
+                  >
+                    {authorizationLabel(actionState.result.authorization.status)}
+                  </span>
+                </div>
+                <p>{actionState.result.authorization.detail}</p>
+              </div>
+            </div>
+          ) : null}
+
+          {actionState.result.artifact ? (
+            <div className="action-result__artifact">
+              <span>已导出文件</span>
+              <code>{actionState.result.artifact.path}</code>
+              <button
+                type="button"
+                className="copy-button"
+                onClick={() =>
+                  onCopyText(
+                    `artifact-${actionState.result.action.id}`,
+                    actionState.result.artifact.path
+                  )
+                }
+              >
+                {copiedId === `artifact-${actionState.result.action.id}`
+                  ? "已复制路径"
+                  : "复制路径"}
+              </button>
+            </div>
+          ) : null}
+
+          {actionState.result.logArtifact ? (
+            <div className="action-result__artifact">
+              <span>动作日志</span>
+              <code>{actionState.result.logArtifact.path}</code>
+              <button
+                type="button"
+                className="copy-button"
+                onClick={() =>
+                  onCopyText(
+                    `log-${actionState.result.action.id}`,
+                    actionState.result.logArtifact.path
+                  )
+                }
+              >
+                {copiedId === `log-${actionState.result.action.id}`
+                  ? "已复制路径"
+                  : "复制路径"}
+              </button>
+            </div>
+          ) : null}
+
+          {actionState.result.manualExecution ? (
+            <div className="action-result__block">
+              <h4>人工授权执行</h4>
+              <div className="action-manual__status">
+                <span
+                  className={`tone-pill is-${manualExecutionTone(
+                    actionState.result.manualExecution.status
+                  )}`}
+                >
+                  {manualExecutionLabel(actionState.result.manualExecution.status)}
+                </span>
+                <button
+                  type="button"
+                  className="copy-button"
+                  disabled={actionState.manualCheckLoading}
+                  onClick={() => onCheckManualExecution()}
+                >
+                  {actionState.manualCheckLoading ? "检查中..." : "检查执行结果"}
+                </button>
+              </div>
+              <p className="action-note">{actionState.result.manualExecution.summary}</p>
+              <p className="action-note is-muted">
+                {actionState.result.manualExecution.detail}
+              </p>
+              {actionState.manualCheckError ? (
+                <p className="probe-error">{actionState.manualCheckError}</p>
+              ) : null}
+              {actionState.result.manualExecution.receiptArtifact ? (
+                <div className="action-result__artifact">
+                  <span>授权回执文件</span>
+                  <code>{actionState.result.manualExecution.receiptArtifact.path}</code>
+                  <button
+                    type="button"
+                    className="copy-button"
+                    onClick={() =>
+                      onCopyText(
+                        `receipt-${actionState.result.action.id}`,
+                        actionState.result.manualExecution.receiptArtifact.path
+                      )
+                    }
+                  >
+                    {copiedId === `receipt-${actionState.result.action.id}`
+                      ? "已复制路径"
+                      : "复制路径"}
+                  </button>
+                </div>
+              ) : null}
+              {actionState.result.manualExecution.runtimeLog ? (
+                <div className="action-result__artifact">
+                  <span>授权执行日志</span>
+                  <code>{actionState.result.manualExecution.runtimeLog.path}</code>
+                  <button
+                    type="button"
+                    className="copy-button"
+                    onClick={() =>
+                      onCopyText(
+                        `runtime-log-${actionState.result.action.id}`,
+                        actionState.result.manualExecution.runtimeLog.path
+                      )
+                    }
+                  >
+                    {copiedId === `runtime-log-${actionState.result.action.id}`
+                      ? "已复制路径"
+                      : "复制路径"}
+                  </button>
+                </div>
+              ) : null}
+              <div className="action-launchers">
+                {actionState.result.manualExecution.launchers.map((item) => (
+                  <article key={item.id} className="action-launcher">
+                    <div className="action-launcher__head">
+                      <strong>{item.label}</strong>
+                      <button
+                        type="button"
+                        className="copy-button"
+                        onClick={() =>
+                          onCopyText(
+                            `launcher-${actionState.result.action.id}-${item.id}`,
+                            item.command
+                          )
+                        }
+                      >
+                        {copiedId === `launcher-${actionState.result.action.id}-${item.id}`
+                          ? "已复制命令"
+                          : "复制命令"}
+                      </button>
+                    </div>
+                    <p>{item.description}</p>
+                    <code>{item.command}</code>
+                  </article>
+                ))}
+              </div>
+              <ul>
+                {actionState.result.manualExecution.steps.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+              {actionState.result.manualExecution.receipt ? (
+                <article className="action-receipt">
+                  <div className="action-receipt__head">
+                    <strong>{actionState.result.manualExecution.receipt.executedBy}</strong>
+                    <span
+                      className={`tone-pill is-${manualExecutionTone(
+                        actionState.result.manualExecution.status
+                      )}`}
+                    >
+                      {actionState.result.manualExecution.receipt.status}
+                    </span>
+                  </div>
+                  <p>
+                    完成时间：
+                    {formatProbeTime(
+                      actionState.result.manualExecution.receipt.finishedAt ||
+                        actionState.result.manualExecution.receipt.startedAt
+                    )}
+                  </p>
+                  <div className="tag-row">
+                    <span className="tag-pill">
+                      pre: {actionState.result.manualExecution.receipt.preCheck}
+                    </span>
+                    <span className="tag-pill">
+                      post: {actionState.result.manualExecution.receipt.postCheck}
+                    </span>
+                  </div>
+                </article>
+              ) : actionState.result.manualExecution.checkedAt ? (
+                <p className="action-note is-muted">
+                  最近检查：
+                  {formatProbeTime(actionState.result.manualExecution.checkedAt)}，尚未检测到回执文件。
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+
+          {actionState.result.commandResult ? (
+            <div className="action-result__block">
+              <h4>命令结果</h4>
+              <code>{actionState.result.commandResult.command}</code>
+              <pre>
+                {actionState.result.commandResult.stdout ||
+                  actionState.result.commandResult.stderr ||
+                  "No output"}
+              </pre>
+            </div>
+          ) : null}
+
+          {actionState.result.postCheck ? (
+            <div className="action-result__block">
+              <h4>后置检查</h4>
+              <code>{actionState.result.postCheck.command}</code>
+              <pre>
+                {actionState.result.postCheck.stdout ||
+                  actionState.result.postCheck.stderr ||
+                  "No output"}
+              </pre>
+            </div>
+          ) : null}
+
+          {actionState.result.followUp?.length ? (
+            <div className="action-result__block">
+              <h4>后续建议</h4>
+              <ul>
+                {actionState.result.followUp.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          {actionState.result.rollbackSuggestions?.length ? (
+            <div className="action-result__block">
+              <h4>回滚 / 补救建议</h4>
+              <ul>
+                {actionState.result.rollbackSuggestions.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </article>
+      ) : null}
+
+      {actionHistory.length ? (
+        <div className="action-result action-history">
+          <div className="action-result__head">
+            <div>
+              <p className="eyebrow">Recent Activity</p>
+              <h3>最近动作历史</h3>
+            </div>
+          </div>
+          <div className="history-list">
+            {actionHistory.map((entry) => (
+              <article key={entry.id} className="history-item">
+                <div className="history-item__head">
+                  <strong>{entry.title}</strong>
+                  <span
+                    className={`tone-pill is-${executionTone(entry.state, entry.ok)}`}
+                  >
+                    {executionLabel(entry.state, entry.mode)}
+                  </span>
+                </div>
+                <p>{entry.summary}</p>
+                <small>{formatProbeTime(entry.executedAt)}</small>
+              </article>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function AssistantCard({ entryId, payload, copiedId, onCopy }) {
+  return (
+    <article className="assistant-card">
+      <div className="assistant-card__header">
+        <div className="assistant-card__meta">
+          <span>{payload.label}</span>
+          <strong>{payload.moduleName}</strong>
+        </div>
+
+        <button
+          type="button"
+          className="copy-button"
+          onClick={() => onCopy(entryId, payload.commands)}
+        >
+          {copiedId === entryId ? "已复制命令" : "复制命令"}
+        </button>
+      </div>
+
+      <h3>{payload.title}</h3>
+      <p className="assistant-card__summary">{payload.summary}</p>
+      <p className="assistant-card__context">{payload.context}</p>
+      <p className="assistant-card__hint">{payload.adaptiveHint}</p>
+
+      <div className="tag-row">
+        <span className={`tone-pill is-${payload.severity}`}>
+          {payload.severityLabel}
+        </span>
+        {payload.riskTags.map((item) => (
+          <span key={item} className="tag-pill">
+            {item}
+          </span>
+        ))}
+      </div>
+
+      <div className="assistant-card__grid">
+        <section>
+          <h4>推荐步骤</h4>
+          <ol>
+            {payload.steps.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ol>
+        </section>
+
+        <section>
+          <h4>关键命令</h4>
+          <ul className="command-list">
+            {payload.commands.map((item) => (
+              <li key={item}>
+                <code>{item}</code>
+              </li>
+            ))}
+          </ul>
+        </section>
+      </div>
+
+      <div className="assistant-card__next">
+        <span>下一跳</span>
+        <strong>{payload.nextAction}</strong>
+      </div>
+    </article>
+  );
+}
+
+export default function App() {
+  const [activeModuleId, setActiveModuleId] = useState("printer");
+  const [focusedModuleId, setFocusedModuleId] = useState("printer");
+  const [draft, setDraft] = useState("USB 打印机能识别，但打印队列卡住怎么办？");
+  const [snapshot, setSnapshot] = useState(initialSnapshot);
+  const [copiedId, setCopiedId] = useState("");
+  const [actionCatalog, setActionCatalog] = useState([]);
+  const [actionEnvironment, setActionEnvironment] = useState(null);
+  const [actionHistory, setActionHistory] = useState([]);
+  const [actionState, setActionState] = useState({
+    loading: false,
+    activeId: "",
+    mode: "preview",
+    result: null,
+    error: "",
+    manualCheckLoading: false,
+    manualCheckError: ""
+  });
+  const [probe, setProbe] = useState({
+    status: "idle",
+    data: null,
+    error: ""
+  });
+  const [history, setHistory] = useState(() => [
+    {
+      id: "assistant-seed",
+      role: "assistant",
+      payload: createResponse(
+        "先帮我做一轮外设打印机诊断",
+        moduleMap.printer,
+        initialSnapshot
+      )
+    }
+  ]);
+
+  const deferredHistory = useDeferredValue(history);
+  const activeModule = moduleMap[activeModuleId];
+  const sceneModule = moduleMap[focusedModuleId];
+
+  const sceneStyle = useMemo(
+    () => ({
+      "--scene-accent": sceneModule.accent,
+      "--scene-glow": sceneModule.glow,
+      "--scene-secondary": sceneModule.secondary
+    }),
+    [sceneModule]
+  );
+
+  const signalDeck = useMemo(() => buildSignalDeck(snapshot), [snapshot]);
+  const sceneIntel = useMemo(
+    () => buildSceneIntel(snapshot, sceneModule.id),
+    [snapshot, sceneModule.id]
+  );
+  const latestPayload = useMemo(() => {
+    for (let index = deferredHistory.length - 1; index >= 0; index -= 1) {
+      if (deferredHistory[index].role === "assistant") {
+        return deferredHistory[index].payload;
+      }
+    }
+
+    return null;
+  }, [deferredHistory]);
+
+  function switchModule(moduleId) {
+    setActiveModuleId(moduleId);
+    setFocusedModuleId(moduleId);
+  }
+
+  async function loadActions() {
+    try {
+      const payload = await fetchJson(`${API_BASE}/api/actions`);
+      setActionCatalog(payload.actions);
+      setActionEnvironment(payload.privilegeContext || null);
+    } catch (error) {
+      setActionState((previous) => ({
+        ...previous,
+        error: error instanceof Error ? error.message : String(error)
+      }));
+    }
+  }
+
+  async function runLiveProbe({ silent = false } = {}) {
+    setProbe((previous) => ({
+      ...previous,
+      status: "loading",
+      error: ""
+    }));
+
+    try {
+      const payload = await fetchJson(`${API_BASE}/api/diagnostics/summary`);
+      const diagnostics = payload.diagnostics;
+      const nextSnapshot = mergeSnapshotWithDiagnostics(snapshot, diagnostics);
+
+      setSnapshot(nextSnapshot);
+      setProbe({
+        status: "ready",
+        data: diagnostics,
+        error: ""
+      });
+
+      if (!silent) {
+        const responsePayload = createResponse(
+          "根据实时诊断结果生成建议",
+          activeModule,
+          nextSnapshot
+        );
+
+        startTransition(() => {
+          setHistory((previous) => [
+            ...previous,
+            {
+              id: `assistant-live-${previous.length + 1}`,
+              role: "assistant",
+              payload: responsePayload
+            }
+          ]);
+        });
+      }
+    } catch (error) {
+      setProbe({
+        status: "error",
+        data: null,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+
+  async function runAction(actionId, mode) {
+    setActionState((previous) => ({
+      ...previous,
+      loading: true,
+      activeId: actionId,
+      mode,
+      error: ""
+    }));
+
+    try {
+      const payload = await fetchJson(`${API_BASE}/api/actions/${encodeURIComponent(actionId)}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ mode })
+      });
+
+      setActionState({
+        loading: false,
+        activeId: "",
+        mode,
+        result: payload.result,
+        error: "",
+        manualCheckLoading: false,
+        manualCheckError: ""
+      });
+      setActionHistory((previous) => [
+        {
+          id: `${payload.result.action.id}-${payload.result.executedAt}`,
+          title: payload.result.action.title,
+          mode: payload.result.mode,
+          state: payload.result.state,
+          ok: payload.result.ok,
+          manualId: payload.result.manualExecution?.id || "",
+          summary: payload.result.summary,
+          executedAt: payload.result.executedAt
+        },
+        ...previous
+      ].slice(0, 6));
+
+      if (
+        mode === "run" &&
+        payload.result.state !== "blocked" &&
+        payload.result.action.module !== "support"
+      ) {
+        await runLiveProbe({ silent: true });
+      }
+    } catch (error) {
+      setActionState((previous) => ({
+        ...previous,
+        loading: false,
+        activeId: "",
+        error: error instanceof Error ? error.message : String(error)
+      }));
+    }
+  }
+
+  async function checkManualExecution({ silent = false } = {}) {
+    const manualId = actionState.result?.manualExecution?.id;
+
+    if (!manualId) {
+      return;
+    }
+
+    if (!silent) {
+      setActionState((previous) => ({
+        ...previous,
+        manualCheckLoading: true,
+        manualCheckError: ""
+      }));
+    }
+
+    try {
+      const payload = await fetchJson(
+        `${API_BASE}/api/manual-actions/${encodeURIComponent(manualId)}`
+      );
+      const manualExecution = payload.manualExecution;
+      const manualStatus = manualExecution.status;
+
+      setActionState((previous) => {
+        if (!previous.result?.manualExecution) {
+          return previous;
+        }
+
+        const nextResult = {
+          ...previous.result,
+          manualExecution: {
+            ...previous.result.manualExecution,
+            ...manualExecution
+          }
+        };
+
+        if (manualStatus === "completed") {
+          nextResult.state = "completed";
+          nextResult.ok = true;
+          nextResult.summary = "Manual execution completed";
+          nextResult.followUp = [
+            "已检测到人工授权脚本执行完成。",
+            "系统会重新采集真实快照，确认 CUPS 和队列状态是否恢复。"
+          ];
+        } else if (manualStatus === "failed") {
+          nextResult.state = "failed";
+          nextResult.ok = false;
+          nextResult.summary = "Manual execution finished with errors";
+          nextResult.followUp = [
+            "已经收到人工执行回执，但脚本结果显示失败。",
+            "先查看授权执行日志，再决定是否重新授权或继续诊断。"
+          ];
+        }
+
+        return {
+          ...previous,
+          result: nextResult,
+          manualCheckLoading: false,
+          manualCheckError: ""
+        };
+      });
+
+      if (manualStatus === "completed" || manualStatus === "failed") {
+        setActionHistory((previous) =>
+          previous.map((entry) =>
+            entry.manualId === manualId
+              ? {
+                  ...entry,
+                  state: manualStatus === "completed" ? "completed" : "failed",
+                  ok: manualStatus === "completed",
+                  summary:
+                    manualStatus === "completed"
+                      ? "Manual execution completed"
+                      : "Manual execution finished with errors",
+                  executedAt:
+                    manualExecution.receipt?.finishedAt || entry.executedAt
+                }
+              : entry
+          )
+        );
+        await runLiveProbe({ silent: true });
+        await loadActions();
+      }
+    } catch (error) {
+      setActionState((previous) => ({
+        ...previous,
+        manualCheckLoading: false,
+        manualCheckError: error instanceof Error ? error.message : String(error)
+      }));
+    }
+  }
+
+  function submitQuestion(rawQuestion) {
+    const question = rawQuestion.trim();
+
+    if (!question) {
+      return;
+    }
+
+    const response = createResponse(question, activeModule, snapshot);
+
+    startTransition(() => {
+      setHistory((previous) => [
+        ...previous,
+        {
+          id: `user-${previous.length + 1}`,
+          role: "user",
+          question
+        },
+        {
+          id: `assistant-${previous.length + 2}`,
+          role: "assistant",
+          payload: response
+        }
+      ]);
+    });
+
+    setDraft("");
+  }
+
+  async function handleCopyText(copyKey, text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedId(copyKey);
+      window.setTimeout(() => setCopiedId(""), 1500);
+    } catch {
+      setCopiedId("");
+    }
+  }
+
+  async function handleCopyCommands(entryId, commands) {
+    return handleCopyText(entryId, commands.join("\n"));
+  }
+
+  function handleSubmit(event) {
+    event.preventDefault();
+    submitQuestion(draft);
+  }
+
+  useEffect(() => {
+    runLiveProbe({ silent: true });
+    loadActions();
+  }, []);
+
+  useEffect(() => {
+    const manualId = actionState.result?.manualExecution?.id;
+    const status = actionState.result?.manualExecution?.status;
+
+    if (!manualId || status !== "pending") {
+      return undefined;
+    }
+
+    const timer = window.setInterval(() => {
+      checkManualExecution({ silent: true });
+    }, 6000);
+
+    return () => window.clearInterval(timer);
+  }, [actionState.result?.manualExecution?.id, actionState.result?.manualExecution?.status]);
+
+  return (
+    <div className="app-shell" style={sceneStyle}>
+      <header className="topbar">
+        <div>
+          <p className="eyebrow">Future support console for deepin / UOS</p>
+          <h1>Orbit Deepin Assistant</h1>
+        </div>
+
+        <div className="topbar__status">
+          <span>Scene: {sceneModule.label}</span>
+          <strong>Focused on system recovery, printers, driver repair</strong>
+        </div>
+      </header>
+
+      <main className="layout">
+        <section className="scene-panel">
+          <div className="scene-panel__header">
+            <div>
+              <p className="eyebrow">Immersive operations map</p>
+              <h2>未来科技感场景 + 模块联动</h2>
+            </div>
+
+            <div className="status-pills">
+              <span>{snapshot.distro}</span>
+              <span>{snapshot.device}</span>
+              <span>{snapshot.connection}</span>
+            </div>
+          </div>
+
+          <div className="orbital-stage">
+            <div className="orbital-stage__halo orbital-stage__halo--outer" />
+            <div className="orbital-stage__halo orbital-stage__halo--mid" />
+            <div className="orbital-stage__halo orbital-stage__halo--inner" />
+            <div className="orbital-stage__nebula orbital-stage__nebula--a" />
+            <div className="orbital-stage__nebula orbital-stage__nebula--b" />
+
+            <div className="globe">
+              <div className="globe__core" />
+              <div className="globe__mesh" />
+              <div className="globe__ring globe__ring--a" />
+              <div className="globe__ring globe__ring--b" />
+              <div className="globe__beacon globe__beacon--north" />
+              <div className="globe__beacon globe__beacon--south" />
+            </div>
+
+            {modules.map((module) => {
+              const isActive = module.id === activeModuleId;
+              const isFocused = module.id === focusedModuleId;
+
+              return (
+                <button
+                  key={module.id}
+                  className={`module-node ${isActive ? "is-active" : ""} ${
+                    isFocused ? "is-focused" : ""
+                  }`}
+                  style={{
+                    top: module.position.top,
+                    left: module.position.left,
+                    "--node-accent": module.accent,
+                    "--node-glow": module.glow
+                  }}
+                  onClick={() => switchModule(module.id)}
+                  onMouseEnter={() => setFocusedModuleId(module.id)}
+                  onMouseLeave={() => setFocusedModuleId(activeModuleId)}
+                >
+                  <span>{module.tag}</span>
+                  <strong>{module.title}</strong>
+                  <small>{module.label}</small>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="scene-detail">
+            <div className="scene-detail__copy">
+              <p className="eyebrow">{sceneModule.label}</p>
+              <h3>{sceneModule.title}</h3>
+              <p>{sceneModule.atmosphere}</p>
+              <div className="tag-row">
+                <span className="tag-pill">{sceneModule.description}</span>
+              </div>
+            </div>
+
+            <div className="workflow">
+              {sceneModule.workflow.map((item, index) => (
+                <article key={item} className="workflow__item">
+                  <span>0{index + 1}</span>
+                  <strong>{item}</strong>
+                </article>
+              ))}
+            </div>
+          </div>
+
+          <div className="intel-grid">
+            {sceneIntel.map((item) => (
+              <article key={item.label} className="intel-card">
+                <span>{item.label}</span>
+                <strong>{item.value}</strong>
+                <small>{item.detail}</small>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="console-panel">
+          <div className="console-panel__header">
+            <div>
+              <p className="eyebrow">Perception Q&A</p>
+              <h2>系统感知问答与排障控制台</h2>
+            </div>
+
+            <div className="console-panel__badge">MVP front-end prototype</div>
+          </div>
+
+          <div className="snapshot-grid">
+            {Object.entries(snapshotOptions).map(([field, values]) => (
+              <label key={field} className="snapshot-field">
+                <span>{field}</span>
+                <select
+                  value={snapshot[field]}
+                  onChange={(event) =>
+                    setSnapshot((previous) => ({
+                      ...previous,
+                      [field]: event.target.value
+                    }))
+                  }
+                >
+                  {values.map((value) => (
+                    <option key={value} value={value}>
+                      {value}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ))}
+          </div>
+
+          <LiveProbePanel probe={probe} onRefresh={runLiveProbe} />
+          <ActionConsole
+            actions={actionCatalog}
+            actionEnvironment={actionEnvironment}
+            actionState={actionState}
+            actionHistory={actionHistory}
+            copiedId={copiedId}
+            onPreview={(actionId) => runAction(actionId, "preview")}
+            onRun={(actionId) => runAction(actionId, "run")}
+            onCopyText={handleCopyText}
+            onCheckManualExecution={() => checkManualExecution()}
+          />
+
+          <div className="signal-grid">
+            {signalDeck.map((item) => (
+              <article key={item.label} className={`signal-card is-${item.tone}`}>
+                <div className="signal-card__top">
+                  <span>{item.label}</span>
+                  <strong>{item.percent}%</strong>
+                </div>
+                <h3>{item.value}</h3>
+                <p>{item.detail}</p>
+              </article>
+            ))}
+          </div>
+
+          {latestPayload ? (
+            <>
+              <div className="mission-grid">
+                <SeverityDial
+                  score={latestPayload.score}
+                  severityLabel={latestPayload.severityLabel}
+                  summary={latestPayload.severitySummary}
+                  tone={latestPayload.severity}
+                />
+
+                <article className="mission-card">
+                  <div className="mission-card__head">
+                    <div>
+                      <p className="eyebrow">Mission brief</p>
+                      <h3>{latestPayload.title}</h3>
+                    </div>
+                    <span className={`tone-pill is-${latestPayload.severity}`}>
+                      {latestPayload.severityLabel}
+                    </span>
+                  </div>
+                  <p className="mission-card__body">{latestPayload.summary}</p>
+                  <div className="tag-row">
+                    {latestPayload.riskTags.map((item) => (
+                      <span key={item} className="tag-pill">
+                        {item}
+                      </span>
+                    ))}
+                  </div>
+                </article>
+              </div>
+
+              <StageRail stages={latestPayload.stageRail} />
+
+              <div className="ops-grid">
+                {latestPayload.opsBoard.map((item) => (
+                  <article key={item.title} className="ops-card">
+                    <span>{item.title}</span>
+                    <strong>{item.value}</strong>
+                    <small>{item.detail}</small>
+                  </article>
+                ))}
+              </div>
+
+              <div className="action-grid">
+                {latestPayload.actionPlan.map((item) => (
+                  <article key={item.title} className="action-card">
+                    <div className="action-card__meta">
+                      <span>{item.timing}</span>
+                      <strong>{item.owner}</strong>
+                    </div>
+                    <h3>{item.title}</h3>
+                    <p>{item.detail}</p>
+                    <code>{item.command}</code>
+                  </article>
+                ))}
+              </div>
+            </>
+          ) : null}
+
+          <div className="prompt-cluster">
+            {activeModule.quickPrompts.map((item) => (
+              <button
+                key={item}
+                type="button"
+                className="ghost-chip"
+                onClick={() => submitQuestion(item)}
+              >
+                {item}
+              </button>
+            ))}
+          </div>
+
+          <form className="composer" onSubmit={handleSubmit}>
+            <textarea
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              placeholder="输入一个系统问题，例如：外接打印机重装驱动后还是 filter failed，应该先看哪一层？"
+            />
+            <button type="submit">生成诊断建议</button>
+          </form>
+
+          <div className="history">
+            {deferredHistory.slice(-4).map((entry) =>
+              entry.role === "user" ? (
+                <article key={entry.id} className="user-card">
+                  <span>你的问题</span>
+                  <strong>{entry.question}</strong>
+                </article>
+              ) : (
+                <AssistantCard
+                  key={entry.id}
+                  entryId={entry.id}
+                  payload={entry.payload}
+                  copiedId={copiedId}
+                  onCopy={handleCopyCommands}
+                />
+              )
+            )}
+          </div>
+        </section>
+      </main>
+    </div>
+  );
+}
