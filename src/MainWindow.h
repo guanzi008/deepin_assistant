@@ -7,6 +7,8 @@
 
 #include <QMainWindow>
 
+template <typename T>
+class QFutureWatcher;
 class QLabel;
 class QListWidget;
 class QComboBox;
@@ -33,6 +35,7 @@ protected:
 private slots:
   void refreshSnapshot();
   void analyzeCurrentScenario();
+  void handleSnapshotCollected();
   void handlePageChanged(int index);
   void refreshMailContext();
   void generateMailDraft();
@@ -57,6 +60,7 @@ private:
   void updateMailContextView();
   void updateMailDraftView();
   void updateMailExportHint();
+  void setRefreshState(bool busy, const QString &statusText = QString());
   void appendLog(const QString &title, const QString &body);
   void reloadArtifactList();
   void positionOnPrimaryScreen();
@@ -80,7 +84,10 @@ private:
   QString m_lastMailContextPath;
   bool m_pinned = true;
   bool m_allowClose = false;
+  bool m_refreshQueued = false;
 
+  QFutureWatcher<DiagnosticSnapshot> *m_snapshotWatcher = nullptr;
+  QPushButton *m_refreshButton = nullptr;
   QLabel *m_runtimeLabel = nullptr;
   QLabel *m_systemLabel = nullptr;
   QLabel *m_diskLabel = nullptr;

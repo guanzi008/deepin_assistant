@@ -22,12 +22,14 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QPixmap>
+#include <QFutureWatcher>
 #include <QScreen>
 #include <QStackedWidget>
 #include <QTextEdit>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QWindow>
+#include <QtConcurrent/QtConcurrentRun>
 
 namespace {
 
@@ -88,9 +90,15 @@ MainWindow::MainWindow(const QString &artifactsDir, QWidget *parent)
     : QMainWindow(parent), m_diagnostics(artifactsDir), m_actionExecutor(artifactsDir) {
   buildUi();
   positionOnPrimaryScreen();
+  m_snapshotWatcher = new QFutureWatcher<DiagnosticSnapshot>(this);
+  connect(m_snapshotWatcher,
+          &QFutureWatcher<DiagnosticSnapshot>::finished,
+          this,
+          &MainWindow::handleSnapshotCollected);
   refreshMailContext();
-  refreshSnapshot();
+  updateSnapshotView();
   analyzeCurrentScenario();
+  refreshSnapshot();
 }
 
 void MainWindow::buildUi() {
@@ -134,9 +142,9 @@ void MainWindow::buildUi() {
   titleWrap->addWidget(m_runtimeLabel);
   headerLayout->addLayout(titleWrap, 1);
 
-  auto *refreshButton = new QPushButton(QStringLiteral("刷新诊断"));
-  connect(refreshButton, &QPushButton::clicked, this, &MainWindow::refreshSnapshot);
-  headerLayout->addWidget(refreshButton);
+  m_refreshButton = new QPushButton(QStringLiteral("刷新诊断"));
+  connect(m_refreshButton, &QPushButton::clicked, this, &MainWindow::refreshSnapshot);
+  headerLayout->addWidget(m_refreshButton);
 
   auto *openArtifactsButton = new QPushButton(QStringLiteral("资料目录"));
   connect(openArtifactsButton,
@@ -601,12 +609,38 @@ void MainWindow::positionOnPrimaryScreen() {
 }
 
 void MainWindow::refreshSnapshot() {
-  QApplication::setOverrideCursor(Qt::BusyCursor);
-  m_snapshot = m_diagnostics.collect();
-  QApplication::restoreOverrideCursor();
+  if (m_snapshotWatcher && m_snapshotWatcher->isRunning()) {
+    m_refreshQueued = true;
+    setRefreshState(true, QStringLiteral("上一轮采集还没结束，当前请求会在结束后自动重跑。"));
+    return;
+  }
+
+  setRefreshState(true, QStringLiteral("正在采集系统、打印、网络和音频状态..."));
+  const DiagnosticsService service = m_diagnostics;
+  if (m_snapshotWatcher) {
+    m_snapshotWatcher->setFuture(QtConcurrent::run([service]() { return service.collect(); }));
+  }
+}
+
+void MainWindow::handleSnapshotCollected() {
+  if (!m_snapshotWatcher) {
+    return;
+  }
+
+  m_snapshot = m_snapshotWatcher->result();
   updateSnapshotView();
   analyzeCurrentScenario();
   generateMailDraft();
+
+  const bool rerun = m_refreshQueued;
+  m_refreshQueued = false;
+  if (rerun) {
+    setRefreshState(true, QStringLiteral("检测到新的刷新请求，继续采集最新状态..."));
+    refreshSnapshot();
+    return;
+  }
+
+  setRefreshState(false);
   appendLog(QStringLiteral("刷新诊断"),
             QStringLiteral("已重新采集系统、打印、网络和音频状态。"));
 }
@@ -874,6 +908,17 @@ void MainWindow::updateMailExportHint() {
   m_mailExportLabel->setText(lines.isEmpty()
                                  ? QStringLiteral("导出后会在资料目录里留下草稿、上下文和截图。")
                                  : lines.join(QStringLiteral("\n")));
+}
+
+void MainWindow::setRefreshState(bool busy, const QString &statusText) {
+  if (m_refreshButton) {
+    m_refreshButton->setEnabled(!busy);
+  }
+  if (m_runtimeLabel) {
+    m_runtimeLabel->setText(
+        busy ? statusText
+             : QStringLiteral("原生桌面模式 · Qt6 / C++ / CMake"));
+  }
 }
 
 void MainWindow::exportMailContext() {

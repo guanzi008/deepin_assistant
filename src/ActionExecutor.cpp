@@ -49,6 +49,19 @@ void addOutputPath(ActionOutcome &outcome,
   }
 }
 
+QString shellQuote(const QString &value) {
+  QString escaped = value;
+  escaped.replace('\'', QStringLiteral("'\"'\"'"));
+  return QStringLiteral("'%1'").arg(escaped);
+}
+
+QString jsonStringLiteral(const QString &value) {
+  const QJsonArray array = QJsonArray{value};
+  const QString json = QString::fromUtf8(
+      QJsonDocument(array).toJson(QJsonDocument::Compact));
+  return json.mid(1, json.size() - 2);
+}
+
 QJsonArray toJsonArray(const QStringList &values) {
   QJsonArray array;
   for (const auto &value : values) {
@@ -365,13 +378,75 @@ ActionOutcome ActionExecutor::createPrivilegedScript(const QString &actionId,
                                                      const QString &label,
                                                      const QStringList &commands,
                                                      const QString &summary) const {
-  QStringList lines;
-  lines << QStringLiteral("#!/bin/sh")
-        << QStringLiteral("set -eu");
-  lines << commands;
+  const QString baseName =
+      QStringLiteral("%1-%2").arg(actionId, timestamp());
+  const QString scriptPath = QDir(ensureSubdir(QStringLiteral("pending-actions")))
+                                 .filePath(baseName + QStringLiteral(".sh"));
+  const QString logPath = QDir(ensureSubdir(QStringLiteral("manual-runs")))
+                              .filePath(baseName + QStringLiteral(".log"));
+  const QString receiptPath = QDir(ensureSubdir(QStringLiteral("manual-runs")))
+                                  .filePath(baseName + QStringLiteral(".json"));
 
-  const QString fileName =
-      QStringLiteral("%1-%2.sh").arg(actionId, timestamp());
+  QStringList lines;
+  lines << QStringLiteral("#!/usr/bin/env bash")
+        << QStringLiteral("set -u")
+        << QStringLiteral("umask 022")
+        << QStringLiteral("SCRIPT_PATH=%1").arg(shellQuote(scriptPath))
+        << QStringLiteral("LOG_PATH=%1").arg(shellQuote(logPath))
+        << QStringLiteral("RECEIPT_PATH=%1").arg(shellQuote(receiptPath))
+        << QStringLiteral("ACTION_ID=%1").arg(shellQuote(actionId))
+        << QStringLiteral("ACTION_LABEL=%1").arg(shellQuote(label))
+        << QStringLiteral("SUMMARY=%1").arg(shellQuote(summary))
+        << QStringLiteral("started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)")
+        << QStringLiteral("mkdir -p \"$(dirname \"$LOG_PATH\")\" \"$(dirname \"$RECEIPT_PATH\")\"")
+        << QStringLiteral("exec > >(tee -a \"$LOG_PATH\") 2>&1")
+        << QStringLiteral("status=0")
+        << QStringLiteral("echo \"[action] $ACTION_ID ($ACTION_LABEL)\"")
+        << QStringLiteral("echo \"[script] $SCRIPT_PATH\"")
+        << QStringLiteral("echo \"[summary] $SUMMARY\"")
+        << QStringLiteral("commands=(");
+  for (const auto &command : commands) {
+    lines << QStringLiteral("  %1").arg(shellQuote(command));
+  }
+  lines << QStringLiteral(")")
+        << QStringLiteral("for cmd in \"${commands[@]}\"; do")
+        << QStringLiteral("  echo \"[cmd] $cmd\"")
+        << QStringLiteral("  if eval \"$cmd\"; then")
+        << QStringLiteral("    echo \"[ok] $cmd\"")
+        << QStringLiteral("  else")
+        << QStringLiteral("    status=$?")
+        << QStringLiteral("    echo \"[fail] $cmd (exit $status)\"")
+        << QStringLiteral("    break")
+        << QStringLiteral("  fi")
+        << QStringLiteral("done")
+        << QStringLiteral("finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)")
+        << QStringLiteral("if [ \"$status\" -eq 0 ]; then result=success; else result=failed; fi")
+        << QStringLiteral("cat >\"$RECEIPT_PATH\" <<EOF")
+        << QStringLiteral("{")
+        << QStringLiteral("  \"actionId\": %1,").arg(jsonStringLiteral(actionId))
+        << QStringLiteral("  \"actionLabel\": %1,").arg(jsonStringLiteral(label))
+        << QStringLiteral("  \"summary\": %1,").arg(jsonStringLiteral(summary))
+        << QStringLiteral("  \"scriptPath\": %1,").arg(jsonStringLiteral(scriptPath))
+        << QStringLiteral("  \"logPath\": %1,").arg(jsonStringLiteral(logPath))
+        << QStringLiteral("  \"receiptPath\": %1,").arg(jsonStringLiteral(receiptPath))
+        << QStringLiteral("  \"startedAt\": \"$started_at\",")
+        << QStringLiteral("  \"finishedAt\": \"$finished_at\",")
+        << QStringLiteral("  \"exitCode\": $status,")
+        << QStringLiteral("  \"result\": \"$result\",")
+        << QStringLiteral("  \"commands\": [");
+  for (int i = 0; i < commands.size(); ++i) {
+    const QString suffix =
+        (i + 1 == commands.size()) ? QStringLiteral("") : QStringLiteral(",");
+    lines << QStringLiteral("    %1%2")
+                 .arg(jsonStringLiteral(commands.at(i)), suffix);
+  }
+  lines << QStringLiteral("  ]")
+        << QStringLiteral("}")
+        << QStringLiteral("EOF")
+        << QStringLiteral("echo \"[receipt] $RECEIPT_PATH\"")
+        << QStringLiteral("exit \"$status\"");
+
+  const QString fileName = baseName + QStringLiteral(".sh");
   const QString path =
       writeTextFile(QStringLiteral("pending-actions"), fileName, lines.join('\n'));
 
@@ -394,12 +469,15 @@ ActionOutcome ActionExecutor::createPrivilegedScript(const QString &actionId,
   outcome.requiresManualAuth = true;
   outcome.pendingManualAuth = true;
   outcome.summary = summary;
-  outcome.details = QStringLiteral("已生成待执行脚本，请确认后再授权运行。");
-  outcome.commandHint = QStringLiteral("pkexec sh \"%1\"").arg(path);
+  outcome.details =
+      QStringLiteral("已生成待执行脚本、执行日志和执行回执。手工执行后会写回资料目录。");
+  outcome.commandHint = QStringLiteral("pkexec bash \"%1\"").arg(path);
   outcome.previewText = summary;
   outcome.previewCommands = commands;
   outcome.manualAuthCommands << outcome.commandHint;
   addOutputPath(outcome, QStringLiteral("待执行脚本"), path);
+  addOutputPath(outcome, QStringLiteral("执行日志"), logPath);
+  addOutputPath(outcome, QStringLiteral("执行回执"), receiptPath);
   return outcome;
 }
 
@@ -633,6 +711,7 @@ QStringList ActionExecutor::listArtifacts() const {
                                QStringLiteral("workorders"),
                                QStringLiteral("reports"),
                                QStringLiteral("pending-actions"),
+                               QStringLiteral("manual-runs"),
                                QStringLiteral("action-runs"),
                                QStringLiteral("mail-contexts"),
                                QStringLiteral("mail-drafts"),
