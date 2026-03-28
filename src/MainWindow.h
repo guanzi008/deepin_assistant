@@ -109,6 +109,7 @@ private:
   QLabel *m_riskLabel = nullptr;
   QTextEdit *m_findingsEdit = nullptr;
   QTextEdit *m_actionPreviewView = nullptr;
+  QListWidget *m_navList = nullptr;
   QLineEdit *m_mailIntentEdit = nullptr;
   QLineEdit *m_mailRecipientsEdit = nullptr;
   QLineEdit *m_mailSubjectEdit = nullptr;

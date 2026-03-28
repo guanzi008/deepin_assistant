@@ -10,6 +10,7 @@
 #include <QFile>
 #include <QFrame>
 #include <QGuiApplication>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -66,6 +67,14 @@ QFrame *createCard(const QString &title) {
   return card;
 }
 
+QPushButton *createQuickActionButton(const QString &title, const QString &desc) {
+  auto *button = new QPushButton(QStringLiteral("%1\n%2").arg(title, desc));
+  button->setObjectName(QStringLiteral("QuickActionButton"));
+  button->setCursor(Qt::PointingHandCursor);
+  button->setMinimumHeight(88);
+  return button;
+}
+
 QLabel *createValueLabel(bool compact = false) {
   auto *label = new QLabel;
   label->setWordWrap(true);
@@ -111,16 +120,16 @@ void MainWindow::buildUi() {
   rootLayout->setContentsMargins(0, 0, 0, 0);
   rootLayout->setSpacing(0);
 
-  auto *nav = new QListWidget;
-  nav->setFixedWidth(136);
-  nav->addItems({QStringLiteral("概览"),
-                 QStringLiteral("邮件整理"),
-                 QStringLiteral("打印修复"),
-                 QStringLiteral("常见问题"),
-                 QStringLiteral("执行记录")});
-  nav->setCurrentRow(0);
-  nav->setObjectName(QStringLiteral("NavList"));
-  rootLayout->addWidget(nav);
+  m_navList = new QListWidget;
+  m_navList->setFixedWidth(136);
+  m_navList->addItems({QStringLiteral("概览"),
+                       QStringLiteral("邮件整理"),
+                       QStringLiteral("打印修复"),
+                       QStringLiteral("常见问题"),
+                       QStringLiteral("执行记录")});
+  m_navList->setCurrentRow(0);
+  m_navList->setObjectName(QStringLiteral("NavList"));
+  rootLayout->addWidget(m_navList);
 
   auto *mainArea = new QWidget;
   auto *mainLayout = new QVBoxLayout(mainArea);
@@ -174,7 +183,7 @@ void MainWindow::buildUi() {
   m_stack->addWidget(buildHistoryPage());
   mainLayout->addWidget(m_stack, 1);
 
-  connect(nav, &QListWidget::currentRowChanged, this, &MainWindow::handlePageChanged);
+  connect(m_navList, &QListWidget::currentRowChanged, this, &MainWindow::handlePageChanged);
   if (QGuiApplication::clipboard()) {
     connect(QGuiApplication::clipboard(),
             &QClipboard::dataChanged,
@@ -246,6 +255,18 @@ void MainWindow::buildUi() {
     QPushButton:hover {
       background: #17446d;
     }
+    QPushButton#QuickActionButton {
+      background: #0a1b2b;
+      border: 1px solid #214463;
+      border-radius: 16px;
+      padding: 14px 16px;
+      text-align: left;
+      font-weight: 600;
+    }
+    QPushButton#QuickActionButton:hover {
+      background: #10273c;
+      border-color: #2f618e;
+    }
     QComboBox, QPlainTextEdit, QTextEdit, QListWidget {
       background: #091521;
       border: 1px solid #17314a;
@@ -264,6 +285,66 @@ QWidget *MainWindow::buildOverviewPage() {
   auto *page = new QWidget;
   auto *layout = new QVBoxLayout(page);
   layout->setSpacing(14);
+
+  auto *quickCard = createCard(QStringLiteral("快捷入口"));
+  auto *quickLayout = qobject_cast<QVBoxLayout *>(quickCard->layout());
+  auto *quickHint = createValueLabel(true);
+  quickHint->setText(QStringLiteral("参考 UOS AI 的入口组织方式，把常用任务前置成一屏可点的入口。"));
+  quickLayout->addWidget(quickHint);
+
+  auto *quickGrid = new QGridLayout;
+  quickGrid->setHorizontalSpacing(12);
+  quickGrid->setVerticalSpacing(12);
+
+  auto *mailButton = createQuickActionButton(QStringLiteral("邮件整理"),
+                                             QStringLiteral("根据当前窗口和剪贴板整理草稿"));
+  connect(mailButton, &QPushButton::clicked, this, [this]() {
+    if (m_navList) {
+      m_navList->setCurrentRow(1);
+    }
+    refreshMailContext();
+    generateMailDraft();
+  });
+  quickGrid->addWidget(mailButton, 0, 0);
+
+  auto *printerButton = createQuickActionButton(QStringLiteral("打印修复"),
+                                                QStringLiteral("直接进入队列、驱动和 CUPS 修复链"));
+  connect(printerButton, &QPushButton::clicked, this, [this]() {
+    if (m_scenarioBox) {
+      m_scenarioBox->setCurrentText(QStringLiteral("驱动与过滤链异常"));
+    }
+    if (m_navList) {
+      m_navList->setCurrentRow(2);
+    }
+    analyzeCurrentScenario();
+  });
+  quickGrid->addWidget(printerButton, 0, 1);
+
+  auto *generalButton = createQuickActionButton(QStringLiteral("常见问题"),
+                                                QStringLiteral("切到网络、音频和安装问题处理"));
+  connect(generalButton, &QPushButton::clicked, this, [this]() {
+    if (m_scenarioBox) {
+      m_scenarioBox->setCurrentText(QStringLiteral("网络异常"));
+    }
+    if (m_navList) {
+      m_navList->setCurrentRow(3);
+    }
+    analyzeCurrentScenario();
+  });
+  quickGrid->addWidget(generalButton, 1, 0);
+
+  auto *historyButton = createQuickActionButton(QStringLiteral("执行记录"),
+                                                QStringLiteral("回看工单、脚本、日志和截图材料"));
+  connect(historyButton, &QPushButton::clicked, this, [this]() {
+    if (m_navList) {
+      m_navList->setCurrentRow(4);
+    }
+    reloadArtifactList();
+  });
+  quickGrid->addWidget(historyButton, 1, 1);
+
+  quickLayout->addLayout(quickGrid);
+  layout->addWidget(quickCard);
 
   auto *scenarioCard = createCard(QStringLiteral("问题入口"));
   auto *scenarioLayout = qobject_cast<QVBoxLayout *>(scenarioCard->layout());
