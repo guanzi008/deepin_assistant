@@ -3,6 +3,7 @@ import {
   useEffect,
   useDeferredValue,
   useMemo,
+  useRef,
   useState
 } from "react";
 
@@ -2248,6 +2249,60 @@ function CommonIssuePanel({
   );
 }
 
+function FloatingAssistantDock({
+  open,
+  activeLabel,
+  pendingCount,
+  onToggle,
+  onGoTop,
+  onGoCommonIssues,
+  onGoPrintRepair,
+  onGoConsole
+}) {
+  return (
+    <div className={`floating-assistant ${open ? "is-open" : ""}`}>
+      <div className="floating-assistant__menu">
+        <button type="button" className="floating-assistant__action" onClick={onGoCommonIssues}>
+          <span>常见问题</span>
+          <strong>先看网络、音频、安装</strong>
+        </button>
+        <button type="button" className="floating-assistant__action" onClick={onGoPrintRepair}>
+          <span>打印修复</span>
+          <strong>直接进入队列和驱动修复链</strong>
+        </button>
+        <button type="button" className="floating-assistant__action" onClick={onGoConsole}>
+          <span>排障控制台</span>
+          <strong>查看动作、结果和执行记录</strong>
+        </button>
+        <button type="button" className="floating-assistant__action" onClick={onGoTop}>
+          <span>回到顶部</span>
+          <strong>返回主场景和模块总览</strong>
+        </button>
+      </div>
+
+      <button
+        type="button"
+        className="floating-assistant__trigger"
+        onClick={onToggle}
+        aria-expanded={open}
+        aria-label={open ? "收起悬浮入口" : "展开悬浮入口"}
+      >
+        <span className="floating-assistant__orb" aria-hidden="true">
+          <span />
+          <span />
+        </span>
+        <span className="floating-assistant__copy">
+          <small>助手入口</small>
+          <strong>{open ? "收起快捷按钮" : activeLabel}</strong>
+        </span>
+        {pendingCount > 0 ? (
+          <span className="floating-assistant__badge">{pendingCount}</span>
+        ) : null}
+      </button>
+    </div>
+  );
+}
+
 function ActionConsole({
   actions,
   actionEnvironment,
@@ -3518,6 +3573,7 @@ export default function App() {
   const [draft, setDraft] = useState("USB 打印机能识别，但打印队列卡住怎么办？");
   const [snapshot, setSnapshot] = useState(initialSnapshot);
   const [copiedId, setCopiedId] = useState("");
+  const [floatingDockOpen, setFloatingDockOpen] = useState(false);
   const [agentTeams, setAgentTeams] = useState({
     scenario: "email-assistant",
     input: agentScenarioDefaultInput("email-assistant"),
@@ -3558,10 +3614,14 @@ export default function App() {
       )
     }
   ]);
+  const commonIssuesRef = useRef(null);
+  const printRepairRef = useRef(null);
+  const consolePanelRef = useRef(null);
 
   const deferredHistory = useDeferredValue(history);
   const activeModule = moduleMap[activeModuleId];
   const sceneModule = moduleMap[focusedModuleId];
+  const pendingManualCount = actionHistory.filter((entry) => entry.state === "blocked").length;
 
   const sceneStyle = useMemo(
     () => ({
@@ -3621,6 +3681,28 @@ export default function App() {
   function handleCommonIssueRun(issue) {
     switchModule("general");
     submitQuestion(issue.prompt);
+  }
+
+  function scrollToSection(ref, moduleId = "") {
+    if (moduleId) {
+      switchModule(moduleId);
+    }
+
+    setFloatingDockOpen(false);
+    window.setTimeout(() => {
+      ref.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start"
+      });
+    }, 80);
+  }
+
+  function scrollToTop() {
+    setFloatingDockOpen(false);
+    window.scrollTo({
+      top: 0,
+      behavior: "smooth"
+    });
   }
 
   async function loadActions() {
@@ -4403,7 +4485,7 @@ export default function App() {
           </div>
         </section>
 
-        <section className="console-panel">
+        <section className="console-panel" ref={consolePanelRef}>
           <div className="console-panel__header">
             <div>
               <p className="eyebrow">问题分析与执行</p>
@@ -4436,21 +4518,25 @@ export default function App() {
             ))}
           </div>
 
-          <CommonIssuePanel
-            draft={draft}
-            snapshot={snapshot}
-            probe={probe}
-            onPickIssue={handleCommonIssuePick}
-            onRunIssue={handleCommonIssueRun}
-          />
-          <PrintRepairChainPanel
-            actions={actionCatalog}
-            probe={probe}
-            snapshot={snapshot}
-            actionState={actionState}
-            onPreview={(actionId) => runAction(actionId, "preview")}
-            onRun={(actionId) => runAction(actionId, "run")}
-          />
+          <div ref={commonIssuesRef}>
+            <CommonIssuePanel
+              draft={draft}
+              snapshot={snapshot}
+              probe={probe}
+              onPickIssue={handleCommonIssuePick}
+              onRunIssue={handleCommonIssueRun}
+            />
+          </div>
+          <div ref={printRepairRef}>
+            <PrintRepairChainPanel
+              actions={actionCatalog}
+              probe={probe}
+              snapshot={snapshot}
+              actionState={actionState}
+              onPreview={(actionId) => runAction(actionId, "preview")}
+              onRun={(actionId) => runAction(actionId, "run")}
+            />
+          </div>
           <LiveProbePanel probe={probe} onRefresh={runLiveProbe} />
           <AgentTeamsPanel
             contextState={{
@@ -4600,6 +4686,17 @@ export default function App() {
           </div>
         </section>
       </main>
+
+      <FloatingAssistantDock
+        open={floatingDockOpen}
+        activeLabel={sceneModule.title}
+        pendingCount={pendingManualCount}
+        onToggle={() => setFloatingDockOpen((previous) => !previous)}
+        onGoTop={scrollToTop}
+        onGoCommonIssues={() => scrollToSection(commonIssuesRef, "general")}
+        onGoPrintRepair={() => scrollToSection(printRepairRef, "printer")}
+        onGoConsole={() => scrollToSection(consolePanelRef)}
+      />
     </div>
   );
 }
