@@ -365,6 +365,8 @@ const distroProfiles = {
 
 const moduleMap = Object.fromEntries(modules.map((item) => [item.id, item]));
 const API_BASE = import.meta.env.DEV ? "" : "http://127.0.0.1:4174";
+const desktopBridge =
+  typeof window !== "undefined" && window.orbitDesktop ? window.orbitDesktop : null;
 
 function flattenFlows() {
   return Object.entries(knowledgeBase).flatMap(([moduleId, flows]) =>
@@ -3573,6 +3575,14 @@ export default function App() {
   const [draft, setDraft] = useState("USB 打印机能识别，但打印队列卡住怎么办？");
   const [snapshot, setSnapshot] = useState(initialSnapshot);
   const [copiedId, setCopiedId] = useState("");
+  const [desktopRuntime, setDesktopRuntime] = useState({
+    available: false,
+    platform: "",
+    packaged: false,
+    version: "",
+    artifactsDir: "",
+    isAlwaysOnTop: false
+  });
   const [floatingDockOpen, setFloatingDockOpen] = useState(false);
   const [agentTeams, setAgentTeams] = useState({
     scenario: "email-assistant",
@@ -3681,6 +3691,58 @@ export default function App() {
   function handleCommonIssueRun(issue) {
     switchModule("general");
     submitQuestion(issue.prompt);
+  }
+
+  async function loadDesktopRuntime() {
+    if (!desktopBridge?.getRuntimeInfo) {
+      return;
+    }
+
+    try {
+      const payload = await desktopBridge.getRuntimeInfo();
+      setDesktopRuntime({
+        available: true,
+        platform: payload.platform || "",
+        packaged: Boolean(payload.packaged),
+        version: payload.version || "",
+        artifactsDir: payload.artifactsDir || "",
+        isAlwaysOnTop: Boolean(payload.isAlwaysOnTop)
+      });
+    } catch {
+      setDesktopRuntime({
+        available: false,
+        platform: "",
+        packaged: false,
+        version: "",
+        artifactsDir: "",
+        isAlwaysOnTop: false
+      });
+    }
+  }
+
+  async function toggleDesktopPin() {
+    if (!desktopBridge?.toggleAlwaysOnTop) {
+      return;
+    }
+
+    try {
+      const payload = await desktopBridge.toggleAlwaysOnTop();
+      setDesktopRuntime((previous) => ({
+        ...previous,
+        available: true,
+        isAlwaysOnTop: Boolean(payload.isAlwaysOnTop)
+      }));
+    } catch {
+      setDesktopRuntime((previous) => previous);
+    }
+  }
+
+  async function openArtifactsDirectory() {
+    if (!desktopBridge?.openPath || !desktopRuntime.artifactsDir) {
+      return;
+    }
+
+    await desktopBridge.openPath(desktopRuntime.artifactsDir);
   }
 
   function scrollToSection(ref, moduleId = "") {
@@ -4331,6 +4393,7 @@ export default function App() {
     runLiveProbe({ silent: true });
     loadActions();
     refreshAgentContext({ silent: true });
+    loadDesktopRuntime();
   }, []);
 
   useEffect(() => {
@@ -4384,7 +4447,7 @@ export default function App() {
   return (
     <div className="app-shell" style={sceneStyle}>
       <header className="topbar">
-        <div>
+        <div className="topbar__title">
           <p className="eyebrow">deepin / UOS 系统助手</p>
           <h1>Orbit Deepin Assistant</h1>
         </div>
@@ -4392,6 +4455,24 @@ export default function App() {
         <div className="topbar__status">
           <span>当前场景：{sceneModule.label}</span>
           <strong>围绕系统恢复、外设连接和驱动修复展开</strong>
+          {desktopRuntime.available ? (
+            <div className="desktop-toolbar">
+              <span className="tag-pill">
+                桌面模式 {desktopRuntime.packaged ? "已打包" : "本地调试"}
+              </span>
+              <button type="button" className="copy-button" onClick={toggleDesktopPin}>
+                {desktopRuntime.isAlwaysOnTop ? "取消固定" : "固定窗口"}
+              </button>
+              <button
+                type="button"
+                className="copy-button"
+                onClick={openArtifactsDirectory}
+                disabled={!desktopRuntime.artifactsDir}
+              >
+                打开日志目录
+              </button>
+            </div>
+          ) : null}
         </div>
       </header>
 

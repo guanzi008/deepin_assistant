@@ -5,7 +5,7 @@
 1. 邮件整理与发送前确认
 2. 系统问题诊断、外设连接和常见修复动作
 
-项目采用“前端控制台 + 本地服务”的结构，尽量把过程做清楚：先采集上下文，再整理判断结果，最后由用户确认是否执行。
+项目现在采用“桌面窗口 + 本地服务”的结构，尽量把过程做清楚：先采集上下文，再整理判断结果，最后由用户确认是否执行。
 
 ## 文档
 
@@ -33,10 +33,22 @@ npm run dev
 - 前端：`http://127.0.0.1:4173`
 - 本地服务：`http://127.0.0.1:4174`
 
+如果直接以桌面助手方式运行开发版：
+
+```bash
+npm run dev:desktop
+```
+
 如果只启动本地服务：
 
 ```bash
 npm run start:api
+```
+
+如果使用当前构建结果直接启动桌面窗口：
+
+```bash
+npm run desktop
 ```
 
 ## 正式构建
@@ -55,17 +67,32 @@ npm run build
 
 - `dist/`：前端静态发布包
 - `server/index.mjs`：本地服务入口
+- `electron/`：桌面主进程和预加载桥接
 - `package.json` / `package-lock.json`：依赖和启动信息
 
 如果要部署当前版本，至少需要保留：
 
 - `dist/`
 - `server/`
+- `electron/`
 - `package.json`
 - `package-lock.json`
 
-当前默认输出的是网页发布包，不直接生成 `deb`、`AppImage`、`rpm` 这类桌面安装包。  
-如果后面要做正式安装包，需要再补桌面壳和对应打包流程。
+如果要生成 Linux 桌面可执行目录：
+
+```bash
+npm run build:desktop
+```
+
+如果要继续打 `AppImage`：
+
+```bash
+npm run pack:linux
+```
+
+桌面打包输出目录默认是：
+
+- `dist-desktop/`
 
 ## 当前功能
 
@@ -74,6 +101,8 @@ npm run build
 - 统一控制台入口
 - 主场景联动
 - 实时状态展示
+- 桌面窗口壳
+- 固定窗口与日志目录入口
 
 ### 2. 系统状态采集
 
@@ -152,6 +181,9 @@ deepin_assistant/
 │  ├─ demo-script.md
 │  ├─ stage1-proposal.md
 │  └─ stage1-proposal.pdf
+├─ electron/
+│  ├─ main.mjs
+│  └─ preload.mjs
 ├─ server/
 │  └─ index.mjs
 ├─ src/

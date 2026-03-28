@@ -136,6 +136,10 @@ select {
   font-size: clamp(1.8rem, 2.8vw, 3rem);
 }
 
+.topbar__title {
+  min-width: 0;
+}
+
 .eyebrow {
   margin: 0 0 10px;
   color: rgba(239, 248, 255, 0.72);
@@ -157,6 +161,14 @@ select {
 .topbar__status span {
   margin-bottom: 8px;
   color: var(--scene-accent);
+}
+
+.desktop-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: end;
+  gap: 10px;
+  margin-top: 12px;
 }
 
 .layout {
@@ -2257,6 +2269,10 @@ select {
   .topbar__status {
     max-width: none;
     text-align: left;
+  }
+
+  .desktop-toolbar {
+    justify-content: start;
   }
 
   .orbital-stage {

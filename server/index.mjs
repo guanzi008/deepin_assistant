@@ -9,7 +9,9 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 const PORT = Number(process.env.DIAGNOSTICS_PORT || 4174);
 const ROOT_DIR = fileURLToPath(new URL("..", import.meta.url));
-const ARTIFACTS_DIR = path.join(ROOT_DIR, "artifacts");
+const ARTIFACTS_DIR = process.env.ORBIT_ARTIFACTS_DIR
+  ? path.resolve(process.env.ORBIT_ARTIFACTS_DIR)
+  : path.join(ROOT_DIR, "artifacts");
 const PRIVILEGED_GROUPS = new Set(["sudo", "wheel", "admin"]);
 const CORE_PRINT_PACKAGES = [
   "cups",
