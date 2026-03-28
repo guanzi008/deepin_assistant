@@ -1,28 +1,27 @@
 # Demo Script
 
-## Demo A: Smart Email Assistant
+## 场景一：智能邮件助手
 
-1. Open project notes or issue details on deepin desktop.
-2. Copy several key paragraphs.
-3. Open the assistant panel.
-4. Show that the assistant detects email intent from:
-   - current window
-   - clipboard
-   - related local documents
-5. Generate:
-   - recipients
-   - subject
-   - email body
-6. Preview and optionally send a test email after confirmation.
+1. 在 deepin 桌面打开项目文档、issue 页面或会议记录。
+2. 复制几段关键信息到剪贴板。
+3. 打开右侧助手面板。
+4. 展示系统读取到的上下文：
+   - 当前窗口
+   - 剪贴板内容
+   - 相关文件摘要
+5. 生成：
+   - 收件人建议
+   - 邮件标题
+   - 邮件正文
+6. 发送前展示预览，并保留人工确认。
 
-## Demo B: System Diagnosis And Repair
+## 场景二：系统问题诊断与修复
 
-1. Ask a system question such as:
+1. 输入一个系统问题，例如：
    - `打印机连不上`
    - `没有声音了`
    - `帮我安装微信`
-2. Show the collector reading live system state.
-3. Show the planner outputting one or more repair plans.
-4. Preview the action and confirm execution.
-5. Execute the repair or export a guided fix script.
-6. Show the verifier result and follow-up suggestion.
+2. 展示系统采集到的状态信息和诊断依据。
+3. 展示处理方案和执行预览。
+4. 用户确认后执行动作，或导出引导脚本。
+5. 展示执行结果、验证结论和下一步建议。
