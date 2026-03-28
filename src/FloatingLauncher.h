@@ -1,7 +1,14 @@
 #pragma once
 
+#include <QContextMenuEvent>
+#include <QMouseEvent>
+#include <QMoveEvent>
+#include <QPaintEvent>
 #include <QPoint>
+#include <QTimer>
 #include <QWidget>
+
+class DockBubble;
 
 class FloatingLauncher : public QWidget {
   Q_OBJECT
@@ -23,10 +30,24 @@ protected:
   void enterEvent(QEvent *event) override;
   void leaveEvent(QEvent *event) override;
   void contextMenuEvent(QContextMenuEvent *event) override;
+  void moveEvent(QMoveEvent *event) override;
 
 private:
+  void updateBubble();
+  void positionBubble();
+  void updateAnimationState();
+  QString hoverTitle() const;
+  QString hoverBody() const;
+  QString hoverFooter() const;
+
   bool m_hovered = false;
   bool m_dragging = false;
+  bool m_pressed = false;
+  qreal m_clickFlash = 0.0;
+  int m_animTick = 0;
   QPoint m_dragOffset;
   QPoint m_pressGlobalPos;
+  QTimer m_animTimer;
+  QTimer m_bubbleTimer;
+  DockBubble *m_bubble = nullptr;
 };

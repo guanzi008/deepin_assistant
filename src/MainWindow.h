@@ -61,6 +61,7 @@ private:
   void updateMailDraftView();
   void updateMailExportHint();
   void setRefreshState(bool busy, const QString &statusText = QString());
+  void updateNavItemStyles();
   void appendLog(const QString &title, const QString &body);
   void reloadArtifactList();
   void positionOnPrimaryScreen();
@@ -107,9 +108,11 @@ private:
   QLabel *m_planTitleLabel = nullptr;
   QLabel *m_planSummaryLabel = nullptr;
   QLabel *m_riskLabel = nullptr;
+  QLabel *m_artifactSummaryLabel = nullptr;
   QTextEdit *m_findingsEdit = nullptr;
   QTextEdit *m_actionPreviewView = nullptr;
   QListWidget *m_navList = nullptr;
+  QComboBox *m_artifactFilterBox = nullptr;
   QLineEdit *m_mailIntentEdit = nullptr;
   QLineEdit *m_mailRecipientsEdit = nullptr;
   QLineEdit *m_mailSubjectEdit = nullptr;

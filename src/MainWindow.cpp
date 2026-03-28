@@ -67,6 +67,40 @@ QFrame *createCard(const QString &title) {
   return card;
 }
 
+QWidget *createNavItemWidget(const QString &badge,
+                             const QString &title,
+                             const QString &desc) {
+  auto *frame = new QFrame;
+  frame->setObjectName(QStringLiteral("NavItem"));
+  frame->setProperty("selected", false);
+
+  auto *layout = new QHBoxLayout(frame);
+  layout->setContentsMargins(12, 10, 12, 10);
+  layout->setSpacing(10);
+
+  auto *badgeLabel = new QLabel(badge);
+  badgeLabel->setObjectName(QStringLiteral("NavItemBadge"));
+  badgeLabel->setAlignment(Qt::AlignCenter);
+  badgeLabel->setFixedSize(34, 34);
+  layout->addWidget(badgeLabel, 0, Qt::AlignTop);
+
+  auto *textLayout = new QVBoxLayout;
+  textLayout->setContentsMargins(0, 0, 0, 0);
+  textLayout->setSpacing(2);
+
+  auto *titleLabel = new QLabel(title);
+  titleLabel->setObjectName(QStringLiteral("NavItemTitle"));
+  textLayout->addWidget(titleLabel);
+
+  auto *descLabel = new QLabel(desc);
+  descLabel->setObjectName(QStringLiteral("NavItemDesc"));
+  descLabel->setWordWrap(true);
+  textLayout->addWidget(descLabel);
+
+  layout->addLayout(textLayout, 1);
+  return frame;
+}
+
 QPushButton *createQuickActionButton(const QString &title, const QString &desc) {
   auto *button = new QPushButton(QStringLiteral("%1\n%2").arg(title, desc));
   button->setObjectName(QStringLiteral("QuickActionButton"));
@@ -91,6 +125,55 @@ QString singleLine(const QString &text, int limit = 140) {
 QString multilinePreview(const QString &text, int limit = 320) {
   const QString trimmed = text.trimmed();
   return trimmed.isEmpty() ? QStringLiteral("（空）") : trimmed.left(limit);
+}
+
+QString artifactCategoryKey(const QString &path) {
+  if (path.contains(QStringLiteral("/support-bundles/")) ||
+      path.contains(QStringLiteral("/workorders/")) ||
+      path.contains(QStringLiteral("/reports/"))) {
+    return QStringLiteral("reports");
+  }
+  if (path.contains(QStringLiteral("/pending-actions/"))) {
+    return QStringLiteral("pending");
+  }
+  if (path.contains(QStringLiteral("/manual-runs/")) ||
+      path.contains(QStringLiteral("/action-runs/"))) {
+    return QStringLiteral("runs");
+  }
+  if (path.contains(QStringLiteral("/mail-contexts/")) ||
+      path.contains(QStringLiteral("/mail-drafts/"))) {
+    return QStringLiteral("mail");
+  }
+  if (path.contains(QStringLiteral("/screenshots/"))) {
+    return QStringLiteral("screenshots");
+  }
+  return QStringLiteral("other");
+}
+
+QString artifactCategoryLabel(const QString &key) {
+  if (key == QStringLiteral("reports")) {
+    return QStringLiteral("导出资料");
+  }
+  if (key == QStringLiteral("pending")) {
+    return QStringLiteral("待执行脚本");
+  }
+  if (key == QStringLiteral("runs")) {
+    return QStringLiteral("执行日志");
+  }
+  if (key == QStringLiteral("mail")) {
+    return QStringLiteral("邮件材料");
+  }
+  if (key == QStringLiteral("screenshots")) {
+    return QStringLiteral("截图");
+  }
+  return QStringLiteral("其他");
+}
+
+QString artifactDisplayText(const QString &path) {
+  QFileInfo info(path);
+  const QString category = artifactCategoryLabel(artifactCategoryKey(path));
+  return QStringLiteral("[%1] %2\n%3")
+      .arg(category, info.fileName(), path);
 }
 
 } // namespace
@@ -121,14 +204,24 @@ void MainWindow::buildUi() {
   rootLayout->setSpacing(0);
 
   m_navList = new QListWidget;
-  m_navList->setFixedWidth(136);
-  m_navList->addItems({QStringLiteral("概览"),
-                       QStringLiteral("邮件整理"),
-                       QStringLiteral("打印修复"),
-                       QStringLiteral("常见问题"),
-                       QStringLiteral("执行记录")});
+  m_navList->setFixedWidth(204);
   m_navList->setCurrentRow(0);
   m_navList->setObjectName(QStringLiteral("NavList"));
+  const QList<QPair<QString, QString>> navItems = {
+      {QStringLiteral("概览"), QStringLiteral("总览和快捷入口")},
+      {QStringLiteral("邮件整理"), QStringLiteral("草稿、上下文和截图")},
+      {QStringLiteral("打印修复"), QStringLiteral("队列、驱动和 CUPS")},
+      {QStringLiteral("常见问题"), QStringLiteral("网络、音频和安装")},
+      {QStringLiteral("执行记录"), QStringLiteral("工单、脚本和日志")}};
+  for (int index = 0; index < navItems.size(); ++index) {
+    auto *item = new QListWidgetItem(m_navList);
+    item->setSizeHint(QSize(0, 74));
+    m_navList->setItemWidget(
+        item,
+        createNavItemWidget(QStringLiteral("%1").arg(index + 1, 2, 10, QChar('0')),
+                            navItems[index].first,
+                            navItems[index].second));
+  }
   rootLayout->addWidget(m_navList);
 
   auto *mainArea = new QWidget;
@@ -183,7 +276,10 @@ void MainWindow::buildUi() {
   m_stack->addWidget(buildHistoryPage());
   mainLayout->addWidget(m_stack, 1);
 
-  connect(m_navList, &QListWidget::currentRowChanged, this, &MainWindow::handlePageChanged);
+  connect(m_navList, &QListWidget::currentRowChanged, this, [this](int index) {
+    handlePageChanged(index);
+    updateNavItemStyles();
+  });
   if (QGuiApplication::clipboard()) {
     connect(QGuiApplication::clipboard(),
             &QClipboard::dataChanged,
@@ -191,6 +287,7 @@ void MainWindow::buildUi() {
             &MainWindow::refreshMailContext);
   }
   handlePageChanged(0);
+  updateNavItemStyles();
 
   rootLayout->addWidget(mainArea, 1);
   setCentralWidget(root);
@@ -236,14 +333,40 @@ void MainWindow::buildUi() {
       outline: 0;
     }
     QListWidget#NavList::item {
-      margin: 6px 12px;
-      padding: 12px 14px;
-      border-radius: 14px;
-      color: #8cb3d6;
+      margin: 6px 10px;
+      padding: 0;
     }
-    QListWidget#NavList::item:selected {
+    QFrame#NavItem {
+      background: #0a1622;
+      border: 1px solid #142b40;
+      border-radius: 16px;
+    }
+    QFrame#NavItem[selected="true"] {
       background: #123456;
+      border-color: #2f618e;
+    }
+    QLabel#NavItemBadge {
+      background: #102437;
+      border-radius: 17px;
+      color: #9dddf0;
+      font-weight: 700;
+      font-size: 12px;
+    }
+    QFrame#NavItem[selected="true"] QLabel#NavItemBadge {
+      background: #1f5f8d;
       color: #f7fbff;
+    }
+    QLabel#NavItemTitle {
+      color: #eef7ff;
+      font-weight: 700;
+      font-size: 14px;
+    }
+    QLabel#NavItemDesc {
+      color: #7ca1bf;
+      font-size: 12px;
+    }
+    QFrame#NavItem[selected="true"] QLabel#NavItemDesc {
+      color: #d7e9f7;
     }
     QPushButton {
       background: #113354;
@@ -623,11 +746,30 @@ QWidget *MainWindow::buildHistoryPage() {
   logLayout->addWidget(m_logView);
   layout->addWidget(logCard, 1);
 
-  auto *artifactCard = createCard(QStringLiteral("导出文件"));
+  auto *artifactCard = createCard(QStringLiteral("资料中心"));
   auto *artifactLayout = qobject_cast<QVBoxLayout *>(artifactCard->layout());
+  auto *artifactToolbar = new QHBoxLayout;
+  m_artifactSummaryLabel = createValueLabel(true);
+  artifactToolbar->addWidget(m_artifactSummaryLabel, 1);
+  m_artifactFilterBox = new QComboBox;
+  m_artifactFilterBox->addItem(QStringLiteral("全部资料"), QStringLiteral("all"));
+  m_artifactFilterBox->addItem(QStringLiteral("导出资料"), QStringLiteral("reports"));
+  m_artifactFilterBox->addItem(QStringLiteral("待执行脚本"), QStringLiteral("pending"));
+  m_artifactFilterBox->addItem(QStringLiteral("执行日志"), QStringLiteral("runs"));
+  m_artifactFilterBox->addItem(QStringLiteral("邮件材料"), QStringLiteral("mail"));
+  m_artifactFilterBox->addItem(QStringLiteral("截图"), QStringLiteral("screenshots"));
+  connect(m_artifactFilterBox,
+          &QComboBox::currentTextChanged,
+          this,
+          [this]() { reloadArtifactList(); });
+  artifactToolbar->addWidget(m_artifactFilterBox);
+  auto *reloadArtifactsButton = new QPushButton(QStringLiteral("刷新列表"));
+  connect(reloadArtifactsButton, &QPushButton::clicked, this, &MainWindow::reloadArtifactList);
+  artifactToolbar->addWidget(reloadArtifactsButton);
+  artifactLayout->addLayout(artifactToolbar);
   m_artifactList = new QListWidget;
   connect(m_artifactList, &QListWidget::itemDoubleClicked, this, [](QListWidgetItem *item) {
-    QDesktopServices::openUrl(QUrl::fromLocalFile(item->text()));
+    QDesktopServices::openUrl(QUrl::fromLocalFile(item->data(Qt::UserRole).toString()));
   });
   artifactLayout->addWidget(m_artifactList);
   layout->addWidget(artifactCard, 1);
@@ -673,6 +815,9 @@ void MainWindow::handlePageChanged(int index) {
 
   if (index == 1) {
     refreshMailContext();
+  }
+  if (index == 4) {
+    reloadArtifactList();
   }
 }
 
@@ -1002,6 +1147,25 @@ void MainWindow::setRefreshState(bool busy, const QString &statusText) {
   }
 }
 
+void MainWindow::updateNavItemStyles() {
+  if (!m_navList) {
+    return;
+  }
+
+  for (int index = 0; index < m_navList->count(); ++index) {
+    auto *item = m_navList->item(index);
+    auto *widget = m_navList->itemWidget(item);
+    if (!widget) {
+      continue;
+    }
+
+    widget->setProperty("selected", index == m_navList->currentRow());
+    widget->style()->unpolish(widget);
+    widget->style()->polish(widget);
+    widget->update();
+  }
+}
+
 void MainWindow::exportMailContext() {
   QJsonObject root;
   root.insert(QStringLiteral("collectedAt"), m_desktopContext.collectedAt);
@@ -1163,10 +1327,32 @@ void MainWindow::appendLog(const QString &title, const QString &body) {
 }
 
 void MainWindow::reloadArtifactList() {
+  if (!m_artifactList) {
+    return;
+  }
+
   m_artifactList->clear();
   const auto files = m_actionExecutor.listArtifacts();
+  const QString filterKey =
+      m_artifactFilterBox ? m_artifactFilterBox->currentData().toString()
+                          : QStringLiteral("all");
+  int visibleCount = 0;
   for (const auto &file : files) {
-    m_artifactList->addItem(file);
+    const QString categoryKey = artifactCategoryKey(file);
+    if (filterKey != QStringLiteral("all") && filterKey != categoryKey) {
+      continue;
+    }
+
+    auto *item = new QListWidgetItem(artifactDisplayText(file), m_artifactList);
+    item->setData(Qt::UserRole, file);
+    item->setToolTip(file);
+    ++visibleCount;
+  }
+  if (m_artifactSummaryLabel) {
+    m_artifactSummaryLabel->setText(
+        QStringLiteral("资料总数：%1 | 当前显示：%2")
+            .arg(files.size())
+            .arg(visibleCount));
   }
 }
 
