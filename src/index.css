@@ -73,6 +73,7 @@ body::after {
 }
 
 button,
+input,
 textarea,
 select {
   font: inherit;
@@ -707,6 +708,63 @@ select {
   margin-top: 14px;
 }
 
+.probe-plan {
+  margin-top: 16px;
+  padding: 16px;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.probe-plan__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: start;
+}
+
+.probe-plan__head span,
+.probe-plan__item strong {
+  color: rgba(239, 248, 255, 0.72);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.74rem;
+}
+
+.probe-plan__head strong {
+  display: block;
+  margin-top: 10px;
+  color: rgba(239, 248, 255, 0.92);
+  font-size: 1rem;
+  letter-spacing: 0.02em;
+}
+
+.probe-plan__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.probe-plan__item {
+  padding: 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.probe-plan__item p,
+.probe-plan__notes li,
+.action-blueprint__grid li p {
+  color: rgba(239, 248, 255, 0.84);
+  line-height: 1.56;
+}
+
+.probe-plan__notes {
+  margin: 14px 0 0;
+  padding-left: 18px;
+}
+
 .probe-command-list {
   display: flex;
   flex-wrap: wrap;
@@ -845,6 +903,38 @@ select {
   word-break: break-word;
 }
 
+.action-inputs {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.action-field {
+  display: grid;
+  gap: 8px;
+}
+
+.action-field span {
+  color: rgba(239, 248, 255, 0.68);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.72rem;
+}
+
+.action-field input {
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(3, 9, 16, 0.72);
+  color: #eff8ff;
+  outline: none;
+}
+
+.action-field input::placeholder {
+  color: rgba(239, 248, 255, 0.4);
+}
+
 .action-tile__buttons {
   margin-top: 16px;
   align-items: center;
@@ -935,6 +1025,11 @@ select {
   margin-top: 14px;
 }
 
+.action-attachments {
+  display: grid;
+  gap: 12px;
+}
+
 .action-result pre {
   margin: 12px 0 0;
   white-space: pre-wrap;
@@ -966,6 +1061,63 @@ select {
 .action-receipt p {
   margin: 10px 0 0;
   color: rgba(239, 248, 255, 0.82);
+}
+
+.action-blueprint__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.action-blueprint__grid h5 {
+  margin: 0 0 10px;
+  color: rgba(239, 248, 255, 0.78);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.78rem;
+}
+
+.action-blueprint__grid ul,
+.action-receipt ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.action-blueprint__grid li,
+.action-receipt li {
+  margin-bottom: 8px;
+  color: rgba(239, 248, 255, 0.84);
+  line-height: 1.56;
+}
+
+.action-blueprint__grid li strong {
+  display: block;
+  margin-bottom: 8px;
+  color: rgba(239, 248, 255, 0.92);
+}
+
+.action-diff {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.action-diff code {
+  display: block;
+  padding: 10px 12px;
+  border-radius: 12px;
+  white-space: pre-wrap;
+}
+
+.action-diff .is-before {
+  background: rgba(255, 157, 136, 0.08);
+  border: 1px solid rgba(255, 157, 136, 0.18);
+}
+
+.action-diff .is-after {
+  background: rgba(158, 248, 216, 0.08);
+  border: 1px solid rgba(158, 248, 216, 0.18);
 }
 
 .timeline-list,
@@ -1452,6 +1604,7 @@ select {
   .live-probe__grid,
   .probe-details__grid,
   .action-console__grid,
+  .action-blueprint__grid,
   .signal-grid,
   .ops-grid,
   .assistant-card__grid,

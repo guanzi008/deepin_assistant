@@ -772,6 +772,29 @@ function actionRunLabel(action, isBusy, mode) {
   return "执行";
 }
 
+function actionInputDefaults(action) {
+  return (action.inputSchema || []).reduce((accumulator, field) => {
+    accumulator[field.id] = field.defaultValue ?? "";
+    return accumulator;
+  }, {});
+}
+
+function mergeActionInputDrafts(actions, previous) {
+  return actions.reduce((accumulator, action) => {
+    accumulator[action.id] = {
+      ...actionInputDefaults(action),
+      ...(previous[action.id] || {})
+    };
+    return accumulator;
+  }, {});
+}
+
+function findAttachmentPathByLabel(attachments, label) {
+  return (
+    attachments?.find((item) => item.label?.includes(label))?.path || ""
+  );
+}
+
 function manualExecutionTone(status) {
   if (status === "completed") {
     return "stable";
@@ -794,6 +817,22 @@ function manualExecutionLabel(status) {
   }
 
   return "等待回执";
+}
+
+function solutionRouteLabel(route) {
+  if (route === "discover") {
+    return "发现设备";
+  }
+
+  if (route === "queue-recovery") {
+    return "队列恢复";
+  }
+
+  if (route === "stack-repair") {
+    return "打印栈修复";
+  }
+
+  return "PPD 微调";
 }
 
 function timelineTone(status) {
@@ -996,6 +1035,55 @@ function LiveProbePanel({ probe, onRefresh }) {
             </div>
           </div>
 
+          {probe.data.solutionPlan ? (
+            <div className="probe-plan">
+              <div className="probe-plan__head">
+                <div>
+                  <span>智能方案引擎</span>
+                  <strong>{probe.data.solutionPlan.headline}</strong>
+                </div>
+                <span className="tone-pill is-warning">
+                  {solutionRouteLabel(probe.data.solutionPlan.route)} ·{" "}
+                  {probe.data.solutionPlan.confidence}%
+                </span>
+              </div>
+              <div className="tag-row">
+                {probe.data.solutionPlan.recommendedActionIds.map((item) => (
+                  <span key={item} className="tag-pill">
+                    {item}
+                  </span>
+                ))}
+                <span
+                  className={`tone-pill is-${
+                    probe.data.solutionPlan.ppdRelevant ? "warning" : "stable"
+                  }`}
+                >
+                  {probe.data.solutionPlan.ppdRelevant
+                    ? "PPD 可参与"
+                    : "先别动 PPD"}
+                </span>
+              </div>
+              <div className="probe-plan__grid">
+                {probe.data.solutionPlan.stages.map((item) => (
+                  <article key={item.title} className="probe-plan__item">
+                    <strong>{item.title}</strong>
+                    <p>{item.summary}</p>
+                    <div className="probe-command-list">
+                      {item.commands.map((command) => (
+                        <code key={command}>{command}</code>
+                      ))}
+                    </div>
+                  </article>
+                ))}
+              </div>
+              <ul className="probe-plan__notes">
+                {probe.data.solutionPlan.notes.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
           <details className="probe-details">
             <summary>查看采集详情</summary>
             <div className="probe-details__grid">
@@ -1027,11 +1115,13 @@ function LiveProbePanel({ probe, onRefresh }) {
 function ActionConsole({
   actions,
   actionEnvironment,
+  actionInputs,
   actionState,
   actionHistory,
   copiedId,
   onPreview,
   onRun,
+  onActionInputChange,
   onCopyText,
   onCheckManualExecution
 }) {
@@ -1110,6 +1200,25 @@ function ActionConsole({
                   </li>
                 ))}
               </ul>
+
+              {action.inputSchema?.length ? (
+                <div className="action-inputs">
+                  {action.inputSchema.map((field) => (
+                    <label key={field.id} className="action-field">
+                      <span>{field.label}</span>
+                      <input
+                        type="text"
+                        value={actionInputs[action.id]?.[field.id] ?? field.defaultValue ?? ""}
+                        placeholder={field.placeholder || ""}
+                        required={field.required}
+                        onChange={(event) =>
+                          onActionInputChange(action.id, field.id, event.target.value)
+                        }
+                      />
+                    </label>
+                  ))}
+                </div>
+              ) : null}
 
               <div className="action-tile__buttons">
                 <button
@@ -1226,6 +1335,729 @@ function ActionConsole({
                   ? "已复制路径"
                   : "复制路径"}
               </button>
+            </div>
+          ) : null}
+
+          {actionState.result.attachments?.length ? (
+            <div className="action-result__block">
+              <h4>附加文件</h4>
+              <div className="action-attachments">
+                {actionState.result.attachments.map((item, index) => (
+                  <div
+                    key={`${item.path}-${index}`}
+                    className="action-result__artifact"
+                  >
+                    <span>{item.label || "附件"}</span>
+                    <code>{item.path}</code>
+                    <button
+                      type="button"
+                      className="copy-button"
+                      onClick={() =>
+                        onCopyText(
+                          `attachment-${actionState.result.action.id}-${index}`,
+                          item.path
+                        )
+                      }
+                    >
+                      {copiedId === `attachment-${actionState.result.action.id}-${index}`
+                        ? "已复制路径"
+                        : "复制路径"}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {actionState.result.queueBlueprint ? (
+            <div className="action-result__block">
+              <h4>队列蓝图</h4>
+              <article className="action-receipt">
+                <div className="action-receipt__head">
+                  <strong>{actionState.result.queueBlueprint.queueName}</strong>
+                  <span className="tone-pill is-warning">
+                    {actionState.result.queueBlueprint.concreteUriDetected
+                      ? "可直接套用"
+                      : "需补 URI"}
+                  </span>
+                </div>
+                <p>
+                  {actionState.result.queueBlueprint.deviceLabel} ·{" "}
+                  {actionState.result.queueBlueprint.connection} · driver{" "}
+                  {actionState.result.queueBlueprint.driverModel}
+                </p>
+                <div className="tag-row">
+                  {actionState.result.queueBlueprint.backendHints?.map((item) => (
+                    <span key={item} className="tag-pill">
+                      {item}
+                    </span>
+                  ))}
+                </div>
+                <div className="action-tile__buttons">
+                  <button
+                    type="button"
+                    className="action-run"
+                    disabled={actionState.loading}
+                    onClick={() => onRun("apply-queue-blueprint")}
+                  >
+                    {actionState.result.queueBlueprint.concreteUriDetected
+                      ? "进入建队列"
+                      : "预填建队列"}
+                  </button>
+                </div>
+                <div className="action-blueprint__grid">
+                  <section>
+                    <h5>候选 URI</h5>
+                    <ul>
+                      {actionState.result.queueBlueprint.candidateUris.map((item) => (
+                        <li key={item}>
+                          <code>{item}</code>
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                  <section>
+                    <h5>命令模板</h5>
+                    <ul>
+                      {actionState.result.queueBlueprint.commands.map((item) => (
+                        <li key={item}>
+                          <code>{item}</code>
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                </div>
+                {actionState.result.queueBlueprint.notes?.length ? (
+                  <ul>
+                    {actionState.result.queueBlueprint.notes.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                ) : null}
+              </article>
+            </div>
+          ) : null}
+
+          {actionState.result.queueProvisioning ? (
+            <div className="action-result__block">
+              <h4>队列部署</h4>
+              <article className="action-receipt">
+                <div className="action-receipt__head">
+                  <strong>{actionState.result.queueProvisioning.queueName}</strong>
+                  <span
+                    className={`tone-pill is-${
+                      actionState.result.state === "completed"
+                        ? "stable"
+                        : actionState.result.state === "blocked"
+                          ? "warning"
+                          : "critical"
+                    }`}
+                  >
+                    {actionState.result.state === "completed"
+                      ? "已建队列"
+                      : actionState.result.state === "blocked"
+                        ? "待授权"
+                        : "待修正"}
+                  </span>
+                </div>
+                <p>
+                  URI：
+                  <code>{actionState.result.queueProvisioning.deviceUri || "未填写"}</code>
+                </p>
+                <div className="tag-row">
+                  <span className="tag-pill">
+                    driver {actionState.result.queueProvisioning.driverModel}
+                  </span>
+                  <span className="tag-pill">
+                    {actionState.result.queueProvisioning.setDefault
+                      ? "设为默认"
+                      : "不改默认"}
+                  </span>
+                </div>
+                <div className="action-tile__buttons">
+                  <button
+                    type="button"
+                    className="copy-button"
+                    disabled={
+                      actionState.loading ||
+                      !actionState.result.queueProvisioning.queueName
+                    }
+                    onClick={() => onRun("run-queue-regression-check")}
+                  >
+                    跑回归检查
+                  </button>
+                  <button
+                    type="button"
+                    className="action-run"
+                    disabled={
+                      actionState.loading ||
+                      !actionState.result.queueProvisioning.queueName
+                    }
+                    onClick={() => onRun("run-queue-smoke-test")}
+                  >
+                    发测试打印
+                  </button>
+                </div>
+              </article>
+            </div>
+          ) : null}
+
+          {actionState.result.queueSmokeTest ? (
+            <div className="action-result__block">
+              <h4>测试打印</h4>
+              <article className="action-receipt">
+                <div className="action-receipt__head">
+                  <strong>{actionState.result.queueSmokeTest.queueName}</strong>
+                  <span
+                    className={`tone-pill is-${
+                      actionState.result.ok ? "stable" : "warning"
+                    }`}
+                  >
+                    {actionState.result.ok ? "已提交" : "提交异常"}
+                  </span>
+                </div>
+                {actionState.result.queueSmokeTest.jobId ? (
+                  <p>
+                    作业号：
+                    <code>{actionState.result.queueSmokeTest.jobId}</code>
+                  </p>
+                ) : null}
+                <p>
+                  测试页：
+                  <code>{actionState.result.queueSmokeTest.testPagePath}</code>
+                </p>
+                <div className="action-tile__buttons">
+                  <button
+                    type="button"
+                    className="copy-button"
+                    disabled={actionState.loading}
+                    onClick={() => onRun("run-queue-regression-check")}
+                  >
+                    跑回归检查
+                  </button>
+                  <button
+                    type="button"
+                    className="action-run"
+                    disabled={
+                      actionState.loading ||
+                      !actionInputs["rollback-ppd-backup"]?.backupPpdPath
+                    }
+                    onClick={() => onRun("rollback-ppd-backup")}
+                  >
+                    回滚旧 PPD
+                  </button>
+                </div>
+                <section>
+                  <h5>排队回执</h5>
+                  <ul>
+                    {actionState.result.queueSmokeTest.spoolPreview?.length ? (
+                      actionState.result.queueSmokeTest.spoolPreview.map((item) => (
+                        <li key={item}>
+                          <code>{item}</code>
+                        </li>
+                      ))
+                    ) : (
+                      <li>当前没有读取到待处理作业回执，可能已直接送达设备或提交失败。</li>
+                    )}
+                  </ul>
+                </section>
+              </article>
+            </div>
+          ) : null}
+
+          {actionState.result.queueRegression ? (
+            <div className="action-result__block">
+              <h4>队列回归检查</h4>
+              <article className="action-receipt">
+                <div className="action-receipt__head">
+                  <strong>{actionState.result.queueRegression.queueName}</strong>
+                  <span
+                    className={`tone-pill is-${
+                      actionState.result.queueRegression.regressionHealthy
+                        ? "stable"
+                        : "warning"
+                    }`}
+                  >
+                    {actionState.result.queueRegression.regressionHealthy
+                      ? "回归稳定"
+                      : "仍有风险"}
+                  </span>
+                </div>
+                <p>
+                  PPD：
+                  <code>{actionState.result.queueRegression.ppdPath}</code>
+                </p>
+                <div className="tag-row">
+                  <span
+                    className={`tag-pill ${
+                      actionState.result.queueRegression.queueStable
+                        ? ""
+                        : "is-warning"
+                    }`}
+                  >
+                    {actionState.result.queueRegression.queueStable
+                      ? "队列稳定"
+                      : "队列异常"}
+                  </span>
+                  <span
+                    className={`tag-pill ${
+                      actionState.result.queueRegression.ppdHealthy
+                        ? ""
+                        : "is-warning"
+                    }`}
+                  >
+                    {actionState.result.queueRegression.ppdHealthy
+                      ? "PPD 校验通过"
+                      : "PPD 有风险"}
+                  </span>
+                </div>
+                <div className="action-tile__buttons">
+                  <button
+                    type="button"
+                    className="copy-button"
+                    disabled={actionState.loading}
+                    onClick={() => onRun("run-queue-smoke-test")}
+                  >
+                    发测试打印
+                  </button>
+                  <button
+                    type="button"
+                    className="action-run"
+                    disabled={
+                      actionState.loading ||
+                      !actionInputs["rollback-ppd-backup"]?.backupPpdPath
+                    }
+                    onClick={() => onRun("rollback-ppd-backup")}
+                  >
+                    回滚旧 PPD
+                  </button>
+                </div>
+                <div className="action-blueprint__grid">
+                  <section>
+                    <h5>检查项</h5>
+                    <ul>
+                      {actionState.result.queueRegression.checks.map((item) => (
+                        <li key={item.name}>
+                          <strong>{item.name}</strong>
+                          <code>{item.command}</code>
+                          <pre>
+                            {item.preview.join("\n") || item.stderr || "No output"}
+                          </pre>
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                </div>
+              </article>
+            </div>
+          ) : null}
+
+          {actionState.result.ppdTuningPlan ? (
+            <div className="action-result__block">
+              <h4>PPD 微调方案</h4>
+              <article className="action-receipt">
+                <div className="action-receipt__head">
+                  <strong>{actionState.result.ppdTuningPlan.queueName}</strong>
+                  <span
+                    className={`tone-pill is-${
+                      actionState.result.ppdTuningPlan.useQueueOptionsFirst
+                        ? "stable"
+                        : "warning"
+                    }`}
+                  >
+                    {actionState.result.ppdTuningPlan.useQueueOptionsFirst
+                      ? "先稳队列"
+                      : "可进 PPD"}
+                  </span>
+                </div>
+                <p>
+                  {actionState.result.ppdTuningPlan.deviceLabel} ·{" "}
+                  {actionState.result.ppdTuningPlan.symptom}
+                </p>
+                <code>{actionState.result.ppdTuningPlan.ppdPath}</code>
+                <div className="action-blueprint__grid">
+                  <section>
+                    <h5>候选调优项</h5>
+                    <ul>
+                      {actionState.result.ppdTuningPlan.tuningItems.map((item) => (
+                        <li key={item.key}>
+                          <strong>{item.key}</strong>
+                          <p>{item.reason}</p>
+                          <div className="probe-command-list">
+                            {item.examples.map((example) => (
+                              <code key={example}>{example}</code>
+                            ))}
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                  <section>
+                    <h5>操作模板</h5>
+                    <ul>
+                      {actionState.result.ppdTuningPlan.commands.map((item) => (
+                        <li key={item}>
+                          <code>{item}</code>
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                </div>
+                <ul>
+                  {actionState.result.ppdTuningPlan.notes.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              </article>
+            </div>
+          ) : null}
+
+          {actionState.result.ppdPatchBlueprint ? (
+            <div className="action-result__block">
+              <h4>PPD 补丁蓝图</h4>
+              <article className="action-receipt">
+                <div className="action-receipt__head">
+                  <strong>{actionState.result.ppdPatchBlueprint.queueName}</strong>
+                  <span
+                    className={`tone-pill is-${
+                      actionState.result.ppdPatchBlueprint.edits.length
+                        ? "warning"
+                        : "stable"
+                    }`}
+                  >
+                    {actionState.result.ppdPatchBlueprint.edits.length
+                      ? `${actionState.result.ppdPatchBlueprint.edits.length} 项补丁`
+                      : "仅校验模板"}
+                  </span>
+                </div>
+                <p>
+                  源 PPD：
+                  <code>{actionState.result.ppdPatchBlueprint.ppdPath}</code>
+                </p>
+                <p>
+                  临时副本：
+                  <code>{actionState.result.ppdPatchBlueprint.tmpPath}</code>
+                </p>
+                <div className="tag-row">
+                  {actionState.result.ppdPatchBlueprint.pageSizeKey ? (
+                    <span className="tag-pill">
+                      PageSize {actionState.result.ppdPatchBlueprint.pageSizeKey}
+                    </span>
+                  ) : null}
+                  {actionState.result.ppdPatchBlueprint.resolution ? (
+                    <span className="tag-pill">
+                      Resolution {actionState.result.ppdPatchBlueprint.resolution}
+                    </span>
+                  ) : null}
+                  {actionState.result.ppdPatchBlueprint.mediaType ? (
+                    <span className="tag-pill">
+                      Media {actionState.result.ppdPatchBlueprint.mediaType}
+                    </span>
+                  ) : null}
+                </div>
+                <div className="action-blueprint__grid">
+                  <section>
+                    <h5>修改项</h5>
+                    <ul>
+                      {actionState.result.ppdPatchBlueprint.edits.length ? (
+                        actionState.result.ppdPatchBlueprint.edits.map((item) => (
+                          <li key={`${item.key}-${item.target}`}>
+                            <strong>{item.key}</strong>
+                            <p>
+                              {item.target === "default"
+                                ? "默认值替换"
+                                : `目标项：${item.target}`}
+                            </p>
+                            <code>{item.value}</code>
+                          </li>
+                        ))
+                      ) : (
+                        <li>当前参数不足以生成具体替换项，蓝图只保留校验和套用模板。</li>
+                      )}
+                    </ul>
+                  </section>
+                  <section>
+                    <h5>命令模板</h5>
+                    <ul>
+                      {actionState.result.ppdPatchBlueprint.applyCommands.map((item) => (
+                        <li key={item}>
+                          <code>{item}</code>
+                        </li>
+                      ))}
+                      {actionState.result.ppdPatchBlueprint.validationCommands.map((item) => (
+                        <li key={item}>
+                          <code>{item}</code>
+                        </li>
+                      ))}
+                      <li>
+                        <code>{actionState.result.ppdPatchBlueprint.commitCommand}</code>
+                      </li>
+                    </ul>
+                  </section>
+                </div>
+                <ul>
+                  {actionState.result.ppdPatchBlueprint.notes.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              </article>
+            </div>
+          ) : null}
+
+          {actionState.result.ppdPatchValidation ? (
+            <div className="action-result__block">
+              <h4>PPD 副本验证</h4>
+              <article className="action-receipt">
+                <div className="action-receipt__head">
+                  <strong>{actionState.result.ppdPatchValidation.queueName}</strong>
+                  <span
+                    className={`tone-pill is-${
+                      actionState.result.ppdPatchValidation.readyToApply
+                        ? "stable"
+                        : actionState.result.ppdPatchValidation.sourceCopyPath
+                          ? "warning"
+                          : "critical"
+                    }`}
+                  >
+                    {actionState.result.ppdPatchValidation.readyToApply
+                      ? "可进入回绑"
+                      : actionState.result.ppdPatchValidation.sourceCopyPath
+                        ? "需人工复核"
+                        : "缺少源文件"}
+                  </span>
+                </div>
+                <p>
+                  源文件：
+                  <code>{actionState.result.ppdPatchValidation.sourcePath}</code>
+                </p>
+                {actionState.result.ppdPatchValidation.patchedCopyPath ? (
+                  <p>
+                    验证副本：
+                    <code>{actionState.result.ppdPatchValidation.patchedCopyPath}</code>
+                  </p>
+                ) : null}
+                <div className="tag-row">
+                  <span className="tag-pill">
+                    命中 {actionState.result.ppdPatchValidation.matchedEditCount}
+                  </span>
+                  <span className="tag-pill">
+                    未命中 {actionState.result.ppdPatchValidation.unmatchedEditCount}
+                  </span>
+                  <span className="tag-pill">
+                    请求补丁 {actionState.result.ppdPatchValidation.requestedEdits}
+                  </span>
+                </div>
+                <div className="action-tile__buttons">
+                  <button
+                    type="button"
+                    className="action-run"
+                    disabled={
+                      actionState.loading ||
+                      !actionState.result.ppdPatchValidation.readyToApply ||
+                      !actionState.result.ppdPatchValidation.patchedCopyPath
+                    }
+                    onClick={() => onRun("apply-validated-ppd-copy")}
+                  >
+                    进入回绑
+                  </button>
+                </div>
+                <div className="action-blueprint__grid">
+                  <section>
+                    <h5>差异预览</h5>
+                    <ul>
+                      {actionState.result.ppdPatchValidation.changes.length ? (
+                        actionState.result.ppdPatchValidation.changes.map((item) => (
+                          <li key={`${item.key}-${item.target}`}>
+                            <strong>{item.key}</strong>
+                            <p>
+                              {item.target === "default"
+                                ? "默认值"
+                                : `目标项：${item.target}`}
+                            </p>
+                            <div className="action-diff">
+                              <code className="is-before">
+                                {item.beforeLine || "未在源 PPD 中命中对应行"}
+                              </code>
+                              {item.afterLine ? (
+                                <code className="is-after">{item.afterLine}</code>
+                              ) : null}
+                            </div>
+                          </li>
+                        ))
+                      ) : (
+                        <li>当前没有可应用的具体补丁项。</li>
+                      )}
+                    </ul>
+                  </section>
+                  <section>
+                    <h5>校验结果</h5>
+                    <ul>
+                      {actionState.result.ppdPatchValidation.validationResults.length ? (
+                        actionState.result.ppdPatchValidation.validationResults.map(
+                          (item) => (
+                            <li key={item.name}>
+                              <strong>{item.name}</strong>
+                              <code>{item.command}</code>
+                              <pre>
+                                {item.preview.join("\n") ||
+                                  item.stderr ||
+                                  "No output"}
+                              </pre>
+                            </li>
+                          )
+                        )
+                      ) : (
+                        <li>当前还没有真实校验输出，通常是因为源 PPD 文件不存在。</li>
+                      )}
+                      {actionState.result.ppdPatchValidation.validatedCommitCommand ? (
+                        <li>
+                          <strong>Validated Commit</strong>
+                          <code>
+                            {actionState.result.ppdPatchValidation.validatedCommitCommand}
+                          </code>
+                        </li>
+                      ) : null}
+                    </ul>
+                  </section>
+                </div>
+                <ul>
+                  {actionState.result.ppdPatchValidation.notes.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              </article>
+            </div>
+          ) : null}
+
+          {actionState.result.queuePpdBinding ? (
+            <div className="action-result__block">
+              <h4>PPD 回绑</h4>
+              <article className="action-receipt">
+                <div className="action-receipt__head">
+                  <strong>{actionState.result.queuePpdBinding.queueName}</strong>
+                  <span
+                    className={`tone-pill is-${
+                      actionState.result.state === "completed"
+                        ? "stable"
+                        : actionState.result.state === "blocked"
+                          ? "warning"
+                          : "critical"
+                    }`}
+                  >
+                    {actionState.result.state === "completed"
+                      ? "已回绑"
+                      : actionState.result.state === "blocked"
+                        ? "待授权"
+                        : "待修复"}
+                  </span>
+                </div>
+                <p>
+                  补丁副本：
+                  <code>{actionState.result.queuePpdBinding.patchedPpdPath}</code>
+                </p>
+                <p>
+                  旧 PPD 备份：
+                  <code>{actionState.result.queuePpdBinding.backupPpdPath}</code>
+                </p>
+                <div className="action-tile__buttons">
+                  <button
+                    type="button"
+                    className="copy-button"
+                    disabled={
+                      actionState.loading ||
+                      actionState.result.state !== "completed"
+                    }
+                    onClick={() => onRun("run-queue-regression-check")}
+                  >
+                    跑回归检查
+                  </button>
+                  <button
+                    type="button"
+                    className="copy-button"
+                    disabled={
+                      actionState.loading ||
+                      actionState.result.state !== "completed"
+                    }
+                    onClick={() => onRun("run-queue-smoke-test")}
+                  >
+                    发测试打印
+                  </button>
+                  <button
+                    type="button"
+                    className="action-run"
+                    disabled={
+                      actionState.loading ||
+                      actionState.result.state !== "completed" ||
+                      !actionInputs["rollback-ppd-backup"]?.backupPpdPath
+                    }
+                    onClick={() => onRun("rollback-ppd-backup")}
+                  >
+                    回滚旧 PPD
+                  </button>
+                </div>
+              </article>
+            </div>
+          ) : null}
+
+          {actionState.result.queueRollback ? (
+            <div className="action-result__block">
+              <h4>PPD 回滚</h4>
+              <article className="action-receipt">
+                <div className="action-receipt__head">
+                  <strong>{actionState.result.queueRollback.queueName}</strong>
+                  <span
+                    className={`tone-pill is-${
+                      actionState.result.state === "completed"
+                        ? "stable"
+                        : actionState.result.state === "blocked"
+                          ? "warning"
+                          : "critical"
+                    }`}
+                  >
+                    {actionState.result.state === "completed"
+                      ? "已回滚"
+                      : actionState.result.state === "blocked"
+                        ? "待授权"
+                        : "待修复"}
+                  </span>
+                </div>
+                <p>
+                  回滚源：
+                  <code>{actionState.result.queueRollback.backupPpdPath}</code>
+                </p>
+                {actionState.result.queueRollback.preRollbackSnapshotPath ? (
+                  <p>
+                    回滚前快照：
+                    <code>
+                      {actionState.result.queueRollback.preRollbackSnapshotPath}
+                    </code>
+                  </p>
+                ) : null}
+                <div className="action-tile__buttons">
+                  <button
+                    type="button"
+                    className="copy-button"
+                    disabled={
+                      actionState.loading ||
+                      actionState.result.state !== "completed"
+                    }
+                    onClick={() => onRun("run-queue-regression-check")}
+                  >
+                    跑回归检查
+                  </button>
+                  <button
+                    type="button"
+                    className="action-run"
+                    disabled={
+                      actionState.loading ||
+                      actionState.result.state !== "completed"
+                    }
+                    onClick={() => onRun("run-queue-smoke-test")}
+                  >
+                    发测试打印
+                  </button>
+                </div>
+              </article>
             </div>
           ) : null}
 
@@ -1359,6 +2191,9 @@ function ActionConsole({
                       {actionState.result.manualExecution.receipt.status}
                     </span>
                   </div>
+                  {actionState.result.manualExecution.receipt.summary ? (
+                    <p>{actionState.result.manualExecution.receipt.summary}</p>
+                  ) : null}
                   <p>
                     完成时间：
                     {formatProbeTime(
@@ -1366,14 +2201,29 @@ function ActionConsole({
                         actionState.result.manualExecution.receipt.startedAt
                     )}
                   </p>
-                  <div className="tag-row">
-                    <span className="tag-pill">
-                      pre: {actionState.result.manualExecution.receipt.preCheck}
-                    </span>
-                    <span className="tag-pill">
-                      post: {actionState.result.manualExecution.receipt.postCheck}
-                    </span>
-                  </div>
+                  {actionState.result.manualExecution.receipt.details?.length ? (
+                    <div className="tag-row">
+                      {actionState.result.manualExecution.receipt.details.map((item) => (
+                        <span key={item} className="tag-pill">
+                          {item}
+                        </span>
+                      ))}
+                    </div>
+                  ) : actionState.result.manualExecution.receipt.preCheck ||
+                    actionState.result.manualExecution.receipt.postCheck ? (
+                    <div className="tag-row">
+                      {actionState.result.manualExecution.receipt.preCheck ? (
+                        <span className="tag-pill">
+                          pre: {actionState.result.manualExecution.receipt.preCheck}
+                        </span>
+                      ) : null}
+                      {actionState.result.manualExecution.receipt.postCheck ? (
+                        <span className="tag-pill">
+                          post: {actionState.result.manualExecution.receipt.postCheck}
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </article>
               ) : actionState.result.manualExecution.checkedAt ? (
                 <p className="action-note is-muted">
@@ -1533,6 +2383,7 @@ export default function App() {
   const [snapshot, setSnapshot] = useState(initialSnapshot);
   const [copiedId, setCopiedId] = useState("");
   const [actionCatalog, setActionCatalog] = useState([]);
+  const [actionInputs, setActionInputs] = useState({});
   const [actionEnvironment, setActionEnvironment] = useState(null);
   const [actionHistory, setActionHistory] = useState([]);
   const [actionState, setActionState] = useState({
@@ -1598,6 +2449,9 @@ export default function App() {
     try {
       const payload = await fetchJson(`${API_BASE}/api/actions`);
       setActionCatalog(payload.actions);
+      setActionInputs((previous) =>
+        mergeActionInputDrafts(payload.actions, previous)
+      );
       setActionEnvironment(payload.privilegeContext || null);
     } catch (error) {
       setActionState((previous) => ({
@@ -1663,12 +2517,13 @@ export default function App() {
     }));
 
     try {
+      const params = actionInputs[actionId] || {};
       const payload = await fetchJson(`${API_BASE}/api/actions/${encodeURIComponent(actionId)}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({ mode })
+        body: JSON.stringify({ mode, params })
       });
 
       setActionState({
@@ -1680,6 +2535,211 @@ export default function App() {
         manualCheckLoading: false,
         manualCheckError: ""
       });
+      if (payload.result.ppdPatchBlueprint) {
+        const blueprint = payload.result.ppdPatchBlueprint;
+        const nextInputs = {
+          queueName: blueprint.queueName || "",
+          ppdPath: blueprint.ppdPath || "",
+          pageSizeKey: blueprint.pageSizeKey || "",
+          paperDimension: blueprint.paperDimension || "",
+          imageableArea: blueprint.imageableArea || "",
+          resolution: blueprint.resolution || "",
+          mediaType: blueprint.mediaType || ""
+        };
+
+        setActionInputs((previous) => ({
+          ...previous,
+          "generate-ppd-patch-blueprint": {
+            ...(previous["generate-ppd-patch-blueprint"] || {}),
+            ...nextInputs
+          },
+          "validate-ppd-patch-copy": {
+            ...(previous["validate-ppd-patch-copy"] || {}),
+            ...nextInputs
+          }
+        }));
+      }
+      if (payload.result.queueBlueprint) {
+        const queueBlueprint = payload.result.queueBlueprint;
+
+        setActionInputs((previous) => ({
+          ...previous,
+          "apply-queue-blueprint": {
+            ...(previous["apply-queue-blueprint"] || {}),
+            queueName: queueBlueprint.queueName || "",
+            deviceUri: queueBlueprint.candidateUris?.[0] || "",
+            driverModel: queueBlueprint.driverModel || "everywhere",
+            setDefault:
+              previous["apply-queue-blueprint"]?.setDefault ||
+              (queueBlueprint.existingQueues?.length ? "no" : "yes")
+          }
+        }));
+      }
+      if (payload.result.queueProvisioning) {
+        const queueProvisioning = payload.result.queueProvisioning;
+        const nextPpdPath = `/etc/cups/ppd/${queueProvisioning.queueName}.ppd`;
+
+        setActionInputs((previous) => ({
+          ...previous,
+          "apply-queue-blueprint": {
+            ...(previous["apply-queue-blueprint"] || {}),
+            queueName: queueProvisioning.queueName || "",
+            deviceUri: queueProvisioning.deviceUri || "",
+            driverModel: queueProvisioning.driverModel || "everywhere",
+            setDefault: queueProvisioning.setDefault ? "yes" : "no"
+          },
+          "generate-ppd-patch-blueprint": {
+            ...(previous["generate-ppd-patch-blueprint"] || {}),
+            queueName: queueProvisioning.queueName || "",
+            ppdPath: nextPpdPath
+          },
+          "validate-ppd-patch-copy": {
+            ...(previous["validate-ppd-patch-copy"] || {}),
+            queueName: queueProvisioning.queueName || "",
+            ppdPath: nextPpdPath
+          },
+          "apply-validated-ppd-copy": {
+            ...(previous["apply-validated-ppd-copy"] || {}),
+            queueName: queueProvisioning.queueName || ""
+          },
+          "run-queue-smoke-test": {
+            ...(previous["run-queue-smoke-test"] || {}),
+            queueName: queueProvisioning.queueName || ""
+          },
+          "run-queue-regression-check": {
+            ...(previous["run-queue-regression-check"] || {}),
+            queueName: queueProvisioning.queueName || ""
+          },
+          "rollback-ppd-backup": {
+            ...(previous["rollback-ppd-backup"] || {}),
+            queueName: queueProvisioning.queueName || ""
+          }
+        }));
+      }
+      if (payload.result.queueSmokeTest) {
+        const smokeTest = payload.result.queueSmokeTest;
+
+        setActionInputs((previous) => ({
+          ...previous,
+          "run-queue-smoke-test": {
+            ...(previous["run-queue-smoke-test"] || {}),
+            queueName: smokeTest.queueName || ""
+          },
+          "run-queue-regression-check": {
+            ...(previous["run-queue-regression-check"] || {}),
+            queueName: smokeTest.queueName || ""
+          },
+          "rollback-ppd-backup": {
+            ...(previous["rollback-ppd-backup"] || {}),
+            queueName: smokeTest.queueName || previous["rollback-ppd-backup"]?.queueName || ""
+          }
+        }));
+      }
+      if (payload.result.queueRegression) {
+        const queueRegression = payload.result.queueRegression;
+
+        setActionInputs((previous) => ({
+          ...previous,
+          "run-queue-smoke-test": {
+            ...(previous["run-queue-smoke-test"] || {}),
+            queueName: queueRegression.queueName || ""
+          },
+          "run-queue-regression-check": {
+            ...(previous["run-queue-regression-check"] || {}),
+            queueName: queueRegression.queueName || ""
+          },
+          "rollback-ppd-backup": {
+            ...(previous["rollback-ppd-backup"] || {}),
+            queueName:
+              queueRegression.queueName || previous["rollback-ppd-backup"]?.queueName || ""
+          }
+        }));
+      }
+      if (payload.result.ppdPatchValidation?.patchedCopyPath) {
+        const validation = payload.result.ppdPatchValidation;
+
+        setActionInputs((previous) => ({
+          ...previous,
+          "apply-validated-ppd-copy": {
+            ...(previous["apply-validated-ppd-copy"] || {}),
+            queueName: validation.queueName || "",
+            patchedPpdPath: validation.patchedCopyPath || ""
+          }
+        }));
+      }
+      if (payload.result.queuePpdBinding) {
+        const queuePpdBinding = payload.result.queuePpdBinding;
+
+        setActionInputs((previous) => ({
+          ...previous,
+          "apply-validated-ppd-copy": {
+            ...(previous["apply-validated-ppd-copy"] || {}),
+            queueName: queuePpdBinding.queueName || "",
+            patchedPpdPath: queuePpdBinding.patchedPpdPath || ""
+          },
+          "run-queue-smoke-test": {
+            ...(previous["run-queue-smoke-test"] || {}),
+            queueName: queuePpdBinding.queueName || ""
+          },
+          "run-queue-regression-check": {
+            ...(previous["run-queue-regression-check"] || {}),
+            queueName: queuePpdBinding.queueName || ""
+          },
+          "rollback-ppd-backup": {
+            ...(previous["rollback-ppd-backup"] || {}),
+            queueName: queuePpdBinding.queueName || "",
+            backupPpdPath:
+              queuePpdBinding.backupPpdPath ||
+              previous["rollback-ppd-backup"]?.backupPpdPath ||
+              ""
+          }
+        }));
+      }
+      if (payload.result.queueRollback) {
+        const queueRollback = payload.result.queueRollback;
+
+        setActionInputs((previous) => ({
+          ...previous,
+          "run-queue-smoke-test": {
+            ...(previous["run-queue-smoke-test"] || {}),
+            queueName: queueRollback.queueName || ""
+          },
+          "run-queue-regression-check": {
+            ...(previous["run-queue-regression-check"] || {}),
+            queueName: queueRollback.queueName || ""
+          },
+          "rollback-ppd-backup": {
+            ...(previous["rollback-ppd-backup"] || {}),
+            queueName: queueRollback.queueName || "",
+            backupPpdPath: queueRollback.backupPpdPath || ""
+          }
+        }));
+      }
+      if (payload.result.action.id === "apply-validated-ppd-copy") {
+        const backupPpdPath =
+          payload.result.queuePpdBinding?.backupPpdPath ||
+          findAttachmentPathByLabel(payload.result.attachments, "旧 PPD 自动备份");
+        const queueName =
+          payload.result.queuePpdBinding?.queueName ||
+          payload.result.queueRollback?.queueName ||
+          payload.result.ppdPatchValidation?.queueName ||
+          actionInputs["apply-validated-ppd-copy"]?.queueName ||
+          "";
+
+        if (queueName || backupPpdPath) {
+          setActionInputs((previous) => ({
+            ...previous,
+            "rollback-ppd-backup": {
+              ...(previous["rollback-ppd-backup"] || {}),
+              queueName: queueName || previous["rollback-ppd-backup"]?.queueName || "",
+              backupPpdPath:
+                backupPpdPath ||
+                previous["rollback-ppd-backup"]?.backupPpdPath ||
+                ""
+            }
+          }));
+        }
+      }
       setActionHistory((previous) => [
         {
           id: `${payload.result.action.id}-${payload.result.executedAt}`,
@@ -1709,6 +2769,16 @@ export default function App() {
         error: error instanceof Error ? error.message : String(error)
       }));
     }
+  }
+
+  function handleActionInputChange(actionId, fieldId, value) {
+    setActionInputs((previous) => ({
+      ...previous,
+      [actionId]: {
+        ...(previous[actionId] || {}),
+        [fieldId]: value
+      }
+    }));
   }
 
   async function checkManualExecution({ silent = false } = {}) {
@@ -1853,6 +2923,28 @@ export default function App() {
     runLiveProbe({ silent: true });
     loadActions();
   }, []);
+
+  useEffect(() => {
+    const plan = actionState.result?.ppdTuningPlan;
+
+    if (!plan) {
+      return;
+    }
+
+    setActionInputs((previous) => ({
+      ...previous,
+      "generate-ppd-patch-blueprint": {
+        ...(previous["generate-ppd-patch-blueprint"] || {}),
+        queueName: plan.queueName || previous["generate-ppd-patch-blueprint"]?.queueName || "",
+        ppdPath: plan.ppdPath || previous["generate-ppd-patch-blueprint"]?.ppdPath || ""
+      },
+      "validate-ppd-patch-copy": {
+        ...(previous["validate-ppd-patch-copy"] || {}),
+        queueName: plan.queueName || previous["validate-ppd-patch-copy"]?.queueName || "",
+        ppdPath: plan.ppdPath || previous["validate-ppd-patch-copy"]?.ppdPath || ""
+      }
+    }));
+  }, [actionState.result?.ppdTuningPlan]);
 
   useEffect(() => {
     const manualId = actionState.result?.manualExecution?.id;
@@ -2010,11 +3102,13 @@ export default function App() {
           <ActionConsole
             actions={actionCatalog}
             actionEnvironment={actionEnvironment}
+            actionInputs={actionInputs}
             actionState={actionState}
             actionHistory={actionHistory}
             copiedId={copiedId}
             onPreview={(actionId) => runAction(actionId, "preview")}
             onRun={(actionId) => runAction(actionId, "run")}
+            onActionInputChange={handleActionInputChange}
             onCopyText={handleCopyText}
             onCheckManualExecution={() => checkManualExecution()}
           />
