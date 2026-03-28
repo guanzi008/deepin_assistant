@@ -1,6 +1,8 @@
 #include "FloatingLauncher.h"
 
 #include <QGuiApplication>
+#include <QContextMenuEvent>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -56,9 +58,42 @@ void FloatingLauncher::paintEvent(QPaintEvent *) {
 
 void FloatingLauncher::mousePressEvent(QMouseEvent *event) {
   if (event->button() == Qt::LeftButton) {
-    emit activated();
+    m_dragging = true;
+    m_dragOffset = event->globalPos() - frameGeometry().topLeft();
+    m_pressGlobalPos = event->globalPos();
   }
+
+  if (event->button() == Qt::RightButton) {
+    event->accept();
+    return;
+  }
+
   QWidget::mousePressEvent(event);
+}
+
+void FloatingLauncher::mouseMoveEvent(QMouseEvent *event) {
+  if (m_dragging && (event->buttons() & Qt::LeftButton)) {
+    move(event->globalPos() - m_dragOffset);
+    event->accept();
+    return;
+  }
+
+  QWidget::mouseMoveEvent(event);
+}
+
+void FloatingLauncher::mouseReleaseEvent(QMouseEvent *event) {
+  if (event->button() == Qt::LeftButton) {
+    const int travel = (event->globalPos() - m_pressGlobalPos).manhattanLength();
+    const bool wasDragging = m_dragging;
+    m_dragging = false;
+    if (wasDragging && travel < 6) {
+      emit activated();
+      event->accept();
+      return;
+    }
+  }
+
+  QWidget::mouseReleaseEvent(event);
 }
 
 void FloatingLauncher::enterEvent(QEvent *event) {
@@ -71,4 +106,27 @@ void FloatingLauncher::leaveEvent(QEvent *event) {
   m_hovered = false;
   update();
   QWidget::leaveEvent(event);
+}
+
+void FloatingLauncher::contextMenuEvent(QContextMenuEvent *event) {
+  QMenu menu(this);
+  auto *toggleAction = menu.addAction(QStringLiteral("显示 / 隐藏主面板"));
+  auto *dockAction = menu.addAction(QStringLiteral("回到右侧停靠位"));
+  menu.addSeparator();
+  auto *quitAction = menu.addAction(QStringLiteral("退出助手"));
+
+  QAction *selected = menu.exec(event->globalPos());
+  if (selected == toggleAction) {
+    emit activated();
+    return;
+  }
+
+  if (selected == dockAction) {
+    anchorToPrimaryScreen();
+    return;
+  }
+
+  if (selected == quitAction) {
+    emit exitRequested();
+  }
 }

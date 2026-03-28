@@ -8,10 +8,17 @@
 struct ActionOutcome {
   QString actionId;
   QString label;
+  QString scenario;
+  QString scenarioLabel;
   bool success = false;
   bool requiresManualAuth = false;
   QString summary;
+  QString previewText;
+  QStringList previewCommands;
+  QStringList manualAuthCommands;
+  QStringList supportedActionIds;
   QString details;
+  QList<ActionArtifactPath> outputPaths;
   QString artifactPath;
   QString commandHint;
 };

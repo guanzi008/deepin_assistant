@@ -34,6 +34,7 @@ int main(int argc, char *argv[]) {
   QObject::connect(&launcher, &FloatingLauncher::activated, &window, [&window]() {
     window.toggleVisibilityFromLauncher();
   });
+  QObject::connect(&launcher, &FloatingLauncher::exitRequested, &app, &QApplication::quit);
   QObject::connect(&window, &MainWindow::exitRequested, &app, &QApplication::quit);
 
   launcher.anchorToPrimaryScreen();

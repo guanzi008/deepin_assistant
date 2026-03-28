@@ -1,13 +1,16 @@
 #pragma once
 
 #include "ActionExecutor.h"
+#include "ContextCollector.h"
 #include "DiagnosticsService.h"
+#include "EmailComposer.h"
 
 #include <QMainWindow>
 
 class QLabel;
 class QListWidget;
 class QComboBox;
+class QLineEdit;
 class QTextEdit;
 class QPlainTextEdit;
 class QPushButton;
@@ -30,6 +33,10 @@ protected:
 private slots:
   void refreshSnapshot();
   void analyzeCurrentScenario();
+  void handlePageChanged(int index);
+  void refreshMailContext();
+  void generateMailDraft();
+  void previewAction(const QString &actionId);
   void openArtifactsDirectory();
   void togglePinnedState();
 
@@ -37,12 +44,15 @@ private:
   void buildUi();
   QWidget *buildOverviewPage();
   QWidget *buildPrinterPage();
+  QWidget *buildMailPage();
   QWidget *buildGeneralPage();
   QWidget *buildHistoryPage();
   QPushButton *createActionButton(const QString &label, const QString &actionId);
   void runAction(const QString &actionId);
   void updateSnapshotView();
   void updateAnalysisView();
+  void updateMailContextView();
+  void updateMailDraftView();
   void appendLog(const QString &title, const QString &body);
   void reloadArtifactList();
   void positionOnPrimaryScreen();
@@ -50,8 +60,12 @@ private:
 
   DiagnosticsService m_diagnostics;
   ActionExecutor m_actionExecutor;
+  ContextCollector m_contextCollector;
+  EmailComposer m_emailComposer;
   DiagnosticSnapshot m_snapshot;
   AnalysisResult m_analysis;
+  DesktopContext m_desktopContext;
+  EmailDraft m_emailDraft;
   bool m_pinned = true;
   bool m_allowClose = false;
 
@@ -64,10 +78,23 @@ private:
   QLabel *m_cupsLabel = nullptr;
   QLabel *m_queueLabel = nullptr;
   QLabel *m_printerDevicesLabel = nullptr;
+  QLabel *m_mailSessionLabel = nullptr;
+  QLabel *m_mailWindowLabel = nullptr;
+  QLabel *m_mailClipboardLabel = nullptr;
+  QLabel *m_mailIntentHintLabel = nullptr;
+  QLabel *m_mailRecipientsHintLabel = nullptr;
+  QLabel *m_mailDraftHintLabel = nullptr;
   QLabel *m_planTitleLabel = nullptr;
   QLabel *m_planSummaryLabel = nullptr;
   QLabel *m_riskLabel = nullptr;
   QTextEdit *m_findingsEdit = nullptr;
+  QTextEdit *m_actionPreviewView = nullptr;
+  QLineEdit *m_mailIntentEdit = nullptr;
+  QLineEdit *m_mailRecipientsEdit = nullptr;
+  QLineEdit *m_mailSubjectEdit = nullptr;
+  QTextEdit *m_mailBodyEdit = nullptr;
+  QTextEdit *m_mailContextEdit = nullptr;
+  QTextEdit *m_mailPreviewEdit = nullptr;
   QListWidget *m_stageList = nullptr;
   QListWidget *m_commandHintList = nullptr;
   QListWidget *m_recommendedActionList = nullptr;

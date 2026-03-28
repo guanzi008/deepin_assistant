@@ -17,6 +17,10 @@ add_executable(orbit_deepin_assistant
     src/MainWindow.h
     src/FloatingLauncher.cpp
     src/FloatingLauncher.h
+    src/ContextCollector.cpp
+    src/ContextCollector.h
+    src/EmailComposer.cpp
+    src/EmailComposer.h
     src/DiagnosticsService.cpp
     src/DiagnosticsService.h
     src/ActionExecutor.cpp

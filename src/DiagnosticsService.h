@@ -1,8 +1,14 @@
 #pragma once
 
+#include <QList>
 #include <QMap>
 #include <QString>
 #include <QStringList>
+
+struct ActionArtifactPath {
+  QString label;
+  QString path;
+};
 
 struct DiagnosticSnapshot {
   QString distroName;
@@ -19,8 +25,23 @@ struct DiagnosticSnapshot {
   QString recentCupsLog;
   QString installAudit;
   QStringList findings;
+  QStringList printerQueueNames;
+  QStringList printerDeviceHints;
+  QStringList recentCupsLogLines;
+  QStringList installAuditLines;
+  QStringList networkInterfaceLines;
+  QStringList audioLines;
+  QString defaultPrinter;
+  QString defaultAudioSink;
+  QString defaultAudioSource;
+  int printerQueueCount = 0;
+  int printerDeviceCount = 0;
+  int networkInterfaceCount = 0;
   bool cupsActive = false;
   bool hasPrinterQueues = false;
+  bool hasNetworkAttention = false;
+  bool hasAudioAttention = false;
+  bool hasInstallAttention = false;
 };
 
 struct AnalysisResult {
@@ -31,6 +52,11 @@ struct AnalysisResult {
   QStringList stages;
   QStringList recommendedActionIds;
   QStringList commandHints;
+  QString previewText;
+  QStringList previewCommands;
+  QStringList manualAuthCommands;
+  QStringList supportedActionIds;
+  QList<ActionArtifactPath> outputPaths;
 };
 
 class DiagnosticsService {
@@ -54,6 +80,8 @@ private:
   QString summarizeAudio() const;
   QString summarizeInstallAudit() const;
   QString inferScenario(const QString &note) const;
+  QString scenarioLabel(const QString &scenario) const;
+  QStringList supportedActionsForScenario(const QString &scenario) const;
 
   QString m_artifactsDir;
 };

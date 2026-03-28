@@ -12,6 +12,52 @@
 #include <QRegularExpression>
 #include <QTextStream>
 
+namespace {
+
+ActionOutcome makeOutcome(const QString &actionId, const QString &label) {
+  ActionOutcome outcome;
+  outcome.actionId = actionId;
+  outcome.label = label;
+  return outcome;
+}
+
+QString scenarioLabel(const QString &scenario) {
+  return scenario.isEmpty() ? QStringLiteral("系统总览") : scenario;
+}
+
+void attachAnalysisMetadata(ActionOutcome &outcome,
+                            const QString &scenario,
+                            const AnalysisResult &analysis) {
+  outcome.scenario = scenario;
+  outcome.scenarioLabel = scenarioLabel(scenario);
+  outcome.previewText = analysis.previewText;
+  outcome.previewCommands = analysis.previewCommands;
+  outcome.manualAuthCommands = analysis.manualAuthCommands;
+  outcome.supportedActionIds = analysis.supportedActionIds;
+}
+
+void addOutputPath(ActionOutcome &outcome,
+                   const QString &label,
+                   const QString &path) {
+  if (path.isEmpty()) {
+    return;
+  }
+
+  outcome.outputPaths.append({label, path});
+  if (outcome.artifactPath.isEmpty()) {
+    outcome.artifactPath = path;
+  }
+}
+
+ActionOutcome finalizeOutcome(ActionOutcome outcome,
+                              const QString &scenario,
+                              const AnalysisResult &analysis) {
+  attachAnalysisMetadata(outcome, scenario, analysis);
+  return outcome;
+}
+
+} // namespace
+
 ActionExecutor::ActionExecutor(const QString &artifactsDir)
     : m_artifactsDir(artifactsDir) {}
 
@@ -101,13 +147,36 @@ ActionOutcome ActionExecutor::createSupportBundle(
   diag.insert(QStringLiteral("rootDiskUsage"), snapshot.rootDiskUsage);
   diag.insert(QStringLiteral("memoryUsage"), snapshot.memoryUsage);
   diag.insert(QStringLiteral("networkSummary"), snapshot.networkSummary);
+  diag.insert(QStringLiteral("networkInterfaceLines"),
+              QJsonArray::fromStringList(snapshot.networkInterfaceLines));
+  diag.insert(QStringLiteral("networkInterfaceCount"), snapshot.networkInterfaceCount);
   diag.insert(QStringLiteral("cupsState"), snapshot.cupsState);
   diag.insert(QStringLiteral("networkManagerState"), snapshot.networkManagerState);
   diag.insert(QStringLiteral("audioState"), snapshot.audioState);
+  diag.insert(QStringLiteral("audioLines"),
+              QJsonArray::fromStringList(snapshot.audioLines));
+  diag.insert(QStringLiteral("defaultAudioSink"), snapshot.defaultAudioSink);
+  diag.insert(QStringLiteral("defaultAudioSource"), snapshot.defaultAudioSource);
   diag.insert(QStringLiteral("printerQueues"), snapshot.printerQueues);
+  diag.insert(QStringLiteral("printerQueueNames"),
+              QJsonArray::fromStringList(snapshot.printerQueueNames));
+  diag.insert(QStringLiteral("printerQueueCount"), snapshot.printerQueueCount);
   diag.insert(QStringLiteral("printerDevices"), snapshot.printerDevices);
+  diag.insert(QStringLiteral("printerDeviceHints"),
+              QJsonArray::fromStringList(snapshot.printerDeviceHints));
+  diag.insert(QStringLiteral("printerDeviceCount"), snapshot.printerDeviceCount);
   diag.insert(QStringLiteral("recentCupsLog"), snapshot.recentCupsLog);
+  diag.insert(QStringLiteral("recentCupsLogLines"),
+              QJsonArray::fromStringList(snapshot.recentCupsLogLines));
   diag.insert(QStringLiteral("installAudit"), snapshot.installAudit);
+  diag.insert(QStringLiteral("installAuditLines"),
+              QJsonArray::fromStringList(snapshot.installAuditLines));
+  diag.insert(QStringLiteral("defaultPrinter"), snapshot.defaultPrinter);
+  diag.insert(QStringLiteral("cupsActive"), snapshot.cupsActive);
+  diag.insert(QStringLiteral("hasPrinterQueues"), snapshot.hasPrinterQueues);
+  diag.insert(QStringLiteral("hasNetworkAttention"), snapshot.hasNetworkAttention);
+  diag.insert(QStringLiteral("hasAudioAttention"), snapshot.hasAudioAttention);
+  diag.insert(QStringLiteral("hasInstallAttention"), snapshot.hasInstallAttention);
   root.insert(QStringLiteral("diagnostics"), diag);
 
   const QString fileName =
@@ -117,16 +186,20 @@ ActionOutcome ActionExecutor::createSupportBundle(
       fileName,
       QJsonDocument(root).toJson(QJsonDocument::Indented));
 
-  return {
-      QStringLiteral("collect-support-bundle"),
-      QStringLiteral("收集支持包"),
-      !path.isEmpty(),
-      false,
-      path.isEmpty() ? QStringLiteral("支持包写入失败。")
-                     : QStringLiteral("支持包已导出。"),
-      path,
-      path,
-      QString()};
+  ActionOutcome outcome = makeOutcome(QStringLiteral("collect-support-bundle"),
+                                      QStringLiteral("收集支持包"));
+  outcome.success = !path.isEmpty();
+  outcome.summary = path.isEmpty() ? QStringLiteral("支持包写入失败。")
+                                   : QStringLiteral("支持包已导出。");
+  outcome.details = path;
+  addOutputPath(outcome, QStringLiteral("支持包"), path);
+  outcome.previewText = analysis.previewText;
+  outcome.previewCommands = analysis.previewCommands;
+  outcome.manualAuthCommands = analysis.manualAuthCommands;
+  outcome.supportedActionIds = analysis.supportedActionIds;
+  outcome.scenario = scenario;
+  outcome.scenarioLabel = scenarioLabel(scenario);
+  return outcome;
 }
 
 ActionOutcome ActionExecutor::exportWorkorder(
@@ -144,6 +217,18 @@ ActionOutcome ActionExecutor::exportWorkorder(
         << QStringLiteral("- 根分区：%1").arg(snapshot.rootDiskUsage)
         << QStringLiteral("- cups：%1").arg(snapshot.cupsState)
         << QStringLiteral("- NetworkManager：%1").arg(snapshot.networkManagerState)
+        << QStringLiteral("- 默认打印机：%1")
+               .arg(snapshot.defaultPrinter.isEmpty() ? QStringLiteral("无")
+                                                      : snapshot.defaultPrinter)
+        << QStringLiteral("- 打印队列数：%1").arg(snapshot.printerQueueCount)
+        << QStringLiteral("- 打印设备数：%1").arg(snapshot.printerDeviceCount)
+        << QStringLiteral("- 网络接口数：%1").arg(snapshot.networkInterfaceCount)
+        << QStringLiteral("- 默认音频输出：%1")
+               .arg(snapshot.defaultAudioSink.isEmpty() ? QStringLiteral("无")
+                                                        : snapshot.defaultAudioSink)
+        << QStringLiteral("- 默认音频输入：%1")
+               .arg(snapshot.defaultAudioSource.isEmpty() ? QStringLiteral("无")
+                                                          : snapshot.defaultAudioSource)
         << QString()
         << QStringLiteral("## 当前判断")
         << analysis.title
@@ -163,6 +248,18 @@ ActionOutcome ActionExecutor::exportWorkorder(
   }
 
   lines << QString()
+        << QStringLiteral("## 结构化快照")
+        << QStringLiteral("- 网络注意项：%1")
+               .arg(snapshot.hasNetworkAttention ? QStringLiteral("是")
+                                                 : QStringLiteral("否"))
+        << QStringLiteral("- 音频注意项：%1")
+               .arg(snapshot.hasAudioAttention ? QStringLiteral("是")
+                                                : QStringLiteral("否"))
+        << QStringLiteral("- 安装注意项：%1")
+               .arg(snapshot.hasInstallAttention ? QStringLiteral("是")
+                                                  : QStringLiteral("否"));
+
+  lines << QString()
         << QStringLiteral("## 命令参考");
   for (const auto &hint : analysis.commandHints) {
     lines << QStringLiteral("- `%1`").arg(hint);
@@ -173,16 +270,20 @@ ActionOutcome ActionExecutor::exportWorkorder(
   const QString path =
       writeTextFile(QStringLiteral("workorders"), fileName, lines.join('\n'));
 
-  return {
-      QStringLiteral("export-workorder"),
-      QStringLiteral("导出诊断工单"),
-      !path.isEmpty(),
-      false,
-      path.isEmpty() ? QStringLiteral("工单写入失败。")
-                     : QStringLiteral("诊断工单已导出。"),
-      path,
-      path,
-      QString()};
+  ActionOutcome outcome = makeOutcome(QStringLiteral("export-workorder"),
+                                      QStringLiteral("导出诊断工单"));
+  outcome.success = !path.isEmpty();
+  outcome.summary = path.isEmpty() ? QStringLiteral("工单写入失败。")
+                                   : QStringLiteral("诊断工单已导出。");
+  outcome.details = path;
+  addOutputPath(outcome, QStringLiteral("诊断工单"), path);
+  outcome.previewText = analysis.previewText;
+  outcome.previewCommands = analysis.previewCommands;
+  outcome.manualAuthCommands = analysis.manualAuthCommands;
+  outcome.supportedActionIds = analysis.supportedActionIds;
+  outcome.scenario = scenario;
+  outcome.scenarioLabel = scenarioLabel(scenario);
+  return outcome;
 }
 
 ActionOutcome ActionExecutor::exportSimpleReport(const QString &actionId,
@@ -192,15 +293,13 @@ ActionOutcome ActionExecutor::exportSimpleReport(const QString &actionId,
   const QString fileName =
       QStringLiteral("%1-%2.txt").arg(actionId, timestamp());
   const QString path = writeTextFile(subdir, fileName, body);
-  return {actionId,
-          label,
-          !path.isEmpty(),
-          false,
-          path.isEmpty() ? QStringLiteral("报告写入失败。")
-                         : QStringLiteral("%1已导出。").arg(label),
-          path,
-          path,
-          QString()};
+  ActionOutcome outcome = makeOutcome(actionId, label);
+  outcome.success = !path.isEmpty();
+  outcome.summary = path.isEmpty() ? QStringLiteral("报告写入失败。")
+                                   : QStringLiteral("%1已导出。").arg(label);
+  outcome.details = body;
+  addOutputPath(outcome, QStringLiteral("%1报告").arg(label), path);
+  return outcome;
 }
 
 ActionOutcome ActionExecutor::createPrivilegedScript(const QString &actionId,
@@ -218,14 +317,11 @@ ActionOutcome ActionExecutor::createPrivilegedScript(const QString &actionId,
       writeTextFile(QStringLiteral("pending-actions"), fileName, lines.join('\n'));
 
   if (path.isEmpty()) {
-    return {actionId,
-            label,
-            false,
-            true,
-            QStringLiteral("授权脚本生成失败。"),
-            QString(),
-            QString(),
-            QString()};
+    ActionOutcome failed = makeOutcome(actionId, label);
+    failed.success = false;
+    failed.requiresManualAuth = true;
+    failed.summary = QStringLiteral("授权脚本生成失败。");
+    return failed;
   }
 
   QFile::setPermissions(path,
@@ -234,14 +330,17 @@ ActionOutcome ActionExecutor::createPrivilegedScript(const QString &actionId,
                             QFileDevice::ExeGroup | QFileDevice::ReadOther |
                             QFileDevice::ExeOther);
 
-  return {actionId,
-          label,
-          true,
-          true,
-          summary,
-          QStringLiteral("已生成待执行脚本，请确认后再授权运行。"),
-          path,
-          QStringLiteral("pkexec sh \"%1\"").arg(path)};
+  ActionOutcome outcome = makeOutcome(actionId, label);
+  outcome.success = true;
+  outcome.requiresManualAuth = true;
+  outcome.summary = summary;
+  outcome.details = QStringLiteral("已生成待执行脚本，请确认后再授权运行。");
+  outcome.commandHint = QStringLiteral("pkexec sh \"%1\"").arg(path);
+  outcome.previewText = summary;
+  outcome.previewCommands = commands;
+  outcome.manualAuthCommands << outcome.commandHint;
+  addOutputPath(outcome, QStringLiteral("待执行脚本"), path);
+  return outcome;
 }
 
 ActionOutcome ActionExecutor::runUserCommand(const QString &actionId,
@@ -261,14 +360,14 @@ ActionOutcome ActionExecutor::runUserCommand(const QString &actionId,
     details << result.errorOutput;
   }
 
-  return {actionId,
-          label,
-          success,
-          false,
-          success ? summary : QStringLiteral("%1执行失败。").arg(label),
-          details.join(QStringLiteral("\n")),
-          QString(),
-          QString()};
+  ActionOutcome outcome = makeOutcome(actionId, label);
+  outcome.success = success;
+  outcome.requiresManualAuth = false;
+  outcome.summary = success ? summary : QStringLiteral("%1执行失败。").arg(label);
+  outcome.details = details.join(QStringLiteral("\n"));
+  outcome.previewText = summary;
+  outcome.previewCommands << command;
+  return outcome;
 }
 
 ActionOutcome ActionExecutor::run(const QString &actionId,
@@ -277,89 +376,143 @@ ActionOutcome ActionExecutor::run(const QString &actionId,
                                   const DiagnosticSnapshot &snapshot,
                                   const AnalysisResult &analysis) const {
   if (actionId == QStringLiteral("collect-support-bundle")) {
-    return createSupportBundle(scenario, note, snapshot, analysis);
+    return finalizeOutcome(createSupportBundle(scenario, note, snapshot, analysis),
+                           scenario,
+                           analysis);
   }
 
   if (actionId == QStringLiteral("export-workorder")) {
-    return exportWorkorder(scenario, note, snapshot, analysis);
+    return finalizeOutcome(exportWorkorder(scenario, note, snapshot, analysis),
+                           scenario,
+                           analysis);
   }
 
   if (actionId == QStringLiteral("export-network-check")) {
-    return exportSimpleReport(QStringLiteral("network-check"),
-                              QStringLiteral("网络检查"),
-                              QStringLiteral("reports"),
-                              snapshot.networkSummary);
+    auto outcome = exportSimpleReport(QStringLiteral("network-check"),
+                                      QStringLiteral("网络检查"),
+                                      QStringLiteral("reports"),
+                                      snapshot.networkSummary);
+    outcome.scenario = scenario;
+    outcome.scenarioLabel = scenarioLabel(scenario);
+    outcome.previewText = analysis.previewText;
+    outcome.previewCommands = analysis.previewCommands;
+    outcome.manualAuthCommands = analysis.manualAuthCommands;
+    outcome.supportedActionIds = analysis.supportedActionIds;
+    return outcome;
   }
 
   if (actionId == QStringLiteral("export-audio-check")) {
-    return exportSimpleReport(QStringLiteral("audio-check"),
-                              QStringLiteral("音频检查"),
-                              QStringLiteral("reports"),
-                              snapshot.audioState);
+    auto outcome = exportSimpleReport(QStringLiteral("audio-check"),
+                                      QStringLiteral("音频检查"),
+                                      QStringLiteral("reports"),
+                                      snapshot.audioState);
+    outcome.scenario = scenario;
+    outcome.scenarioLabel = scenarioLabel(scenario);
+    outcome.previewText = analysis.previewText;
+    outcome.previewCommands = analysis.previewCommands;
+    outcome.manualAuthCommands = analysis.manualAuthCommands;
+    outcome.supportedActionIds = analysis.supportedActionIds;
+    return outcome;
   }
 
   if (actionId == QStringLiteral("export-install-check")) {
-    return exportSimpleReport(QStringLiteral("install-check"),
-                              QStringLiteral("安装检查"),
-                              QStringLiteral("reports"),
-                              snapshot.installAudit);
+    auto outcome = exportSimpleReport(QStringLiteral("install-check"),
+                                      QStringLiteral("安装检查"),
+                                      QStringLiteral("reports"),
+                                      snapshot.installAudit);
+    outcome.scenario = scenario;
+    outcome.scenarioLabel = scenarioLabel(scenario);
+    outcome.previewText = analysis.previewText;
+    outcome.previewCommands = analysis.previewCommands;
+    outcome.manualAuthCommands = analysis.manualAuthCommands;
+    outcome.supportedActionIds = analysis.supportedActionIds;
+    return outcome;
   }
 
   if (actionId == QStringLiteral("clear-print-queue")) {
-    return runUserCommand(actionId,
-                          QStringLiteral("清空打印队列"),
-                          QStringLiteral("cancel -a"),
-                          QStringLiteral("打印队列清理命令已执行。"));
+    auto outcome = runUserCommand(actionId,
+                                  QStringLiteral("清空打印队列"),
+                                  QStringLiteral("cancel -a"),
+                                  QStringLiteral("打印队列清理命令已执行。"));
+    outcome.scenario = scenario;
+    outcome.scenarioLabel = scenarioLabel(scenario);
+    outcome.previewText = QStringLiteral("清理当前用户可执行的打印作业。");
+    outcome.previewCommands << QStringLiteral("cancel -a");
+    outcome.supportedActionIds = analysis.supportedActionIds;
+    return outcome;
   }
 
   if (actionId == QStringLiteral("restart-audio-session")) {
-    return runUserCommand(
+    auto outcome = runUserCommand(
         actionId,
         QStringLiteral("重启音频会话"),
         QStringLiteral(
             "systemctl --user restart wireplumber pipewire pipewire-pulse"),
         QStringLiteral("音频会话重启命令已执行。"));
+    outcome.scenario = scenario;
+    outcome.scenarioLabel = scenarioLabel(scenario);
+    outcome.previewText = QStringLiteral("重启当前用户态音频会话。");
+    outcome.previewCommands << QStringLiteral(
+        "systemctl --user restart wireplumber pipewire pipewire-pulse");
+    outcome.supportedActionIds = analysis.supportedActionIds;
+    return outcome;
   }
 
   if (actionId == QStringLiteral("restart-cups")) {
-    return createPrivilegedScript(
+    auto outcome = createPrivilegedScript(
         actionId,
         QStringLiteral("重启 CUPS"),
         {QStringLiteral("systemctl restart cups"),
          QStringLiteral("systemctl is-active cups")},
         QStringLiteral("已生成 CUPS 重启脚本。"));
+    outcome.scenario = scenario;
+    outcome.scenarioLabel = scenarioLabel(scenario);
+    outcome.supportedActionIds = analysis.supportedActionIds;
+    return outcome;
   }
 
   if (actionId == QStringLiteral("restart-network-manager")) {
-    return createPrivilegedScript(
+    auto outcome = createPrivilegedScript(
         actionId,
         QStringLiteral("重启 NetworkManager"),
         {QStringLiteral("systemctl restart NetworkManager"),
          QStringLiteral("systemctl is-active NetworkManager")},
         QStringLiteral("已生成 NetworkManager 重启脚本。"));
+    outcome.scenario = scenario;
+    outcome.scenarioLabel = scenarioLabel(scenario);
+    outcome.supportedActionIds = analysis.supportedActionIds;
+    return outcome;
   }
 
   if (actionId == QStringLiteral("repair-package-state")) {
-    return createPrivilegedScript(
+    auto outcome = createPrivilegedScript(
         actionId,
         QStringLiteral("修复软件包状态"),
         {QStringLiteral("apt --fix-broken install -y"),
          QStringLiteral("dpkg --configure -a")},
         QStringLiteral("已生成软件包修复脚本。"));
+    outcome.scenario = scenario;
+    outcome.scenarioLabel = scenarioLabel(scenario);
+    outcome.supportedActionIds = analysis.supportedActionIds;
+    return outcome;
   }
 
   if (actionId == QStringLiteral("reinstall-print-stack")) {
-    return createPrivilegedScript(
+    auto outcome = createPrivilegedScript(
         actionId,
         QStringLiteral("重装关键打印组件"),
         {QStringLiteral(
              "apt install --reinstall -y cups cups-filters printer-driver-all"),
          QStringLiteral("systemctl restart cups")},
         QStringLiteral("已生成打印栈重装脚本。"));
+    outcome.scenario = scenario;
+    outcome.scenarioLabel = scenarioLabel(scenario);
+    outcome.supportedActionIds = analysis.supportedActionIds;
+    return outcome;
   }
 
   if (actionId == QStringLiteral("repair-cups-permissions")) {
-    return createPrivilegedScript(
+    auto outcome = createPrivilegedScript(
         actionId,
         QStringLiteral("修复 CUPS 过滤链权限"),
         {QStringLiteral(
@@ -368,19 +521,23 @@ ActionOutcome ActionExecutor::run(const QString &actionId,
              "find /usr/lib/cups/backend -type f -exec chmod 755 {} + 2>/dev/null || true"),
          QStringLiteral("systemctl restart cups")},
         QStringLiteral("已生成 CUPS 过滤链权限修复脚本。"));
+    outcome.scenario = scenario;
+    outcome.scenarioLabel = scenarioLabel(scenario);
+    outcome.supportedActionIds = analysis.supportedActionIds;
+    return outcome;
   }
 
   if (actionId == QStringLiteral("delete-old-queues")) {
     const auto queues = extractQueueNames(snapshot.printerQueues);
     if (queues.isEmpty()) {
-      return {actionId,
-              QStringLiteral("删除旧队列"),
-              true,
-              false,
-              QStringLiteral("当前没有检测到可删除的打印队列。"),
-              QString(),
-              QString(),
-              QString()};
+      ActionOutcome outcome = makeOutcome(actionId, QStringLiteral("删除旧队列"));
+      outcome.success = true;
+      outcome.summary = QStringLiteral("当前没有检测到可删除的打印队列。");
+      outcome.scenario = scenario;
+      outcome.scenarioLabel = scenarioLabel(scenario);
+      outcome.previewText = QStringLiteral("在没有旧队列时，这一步会直接跳过。");
+      outcome.supportedActionIds = analysis.supportedActionIds;
+      return outcome;
     }
 
     QStringList commands;
@@ -388,20 +545,23 @@ ActionOutcome ActionExecutor::run(const QString &actionId,
       commands << QStringLiteral("lpadmin -x %1").arg(queue);
     }
 
-    return createPrivilegedScript(actionId,
-                                  QStringLiteral("删除旧队列"),
-                                  commands,
-                                  QStringLiteral("已生成删除旧打印队列脚本。"));
+    auto outcome = createPrivilegedScript(actionId,
+                                          QStringLiteral("删除旧队列"),
+                                          commands,
+                                          QStringLiteral("已生成删除旧打印队列脚本。"));
+    outcome.scenario = scenario;
+    outcome.scenarioLabel = scenarioLabel(scenario);
+    outcome.supportedActionIds = analysis.supportedActionIds;
+    return outcome;
   }
 
-  return {actionId,
-          actionId,
-          false,
-          false,
-          QStringLiteral("未识别的动作。"),
-          QString(),
-          QString(),
-          QString()};
+  ActionOutcome outcome = makeOutcome(actionId, actionId);
+  outcome.success = false;
+  outcome.summary = QStringLiteral("未识别的动作。");
+  outcome.scenario = scenario;
+  outcome.scenarioLabel = scenarioLabel(scenario);
+  outcome.supportedActionIds = analysis.supportedActionIds;
+  return outcome;
 }
 
 QStringList ActionExecutor::listArtifacts() const {

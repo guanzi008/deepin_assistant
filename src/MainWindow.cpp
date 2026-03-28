@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 
 #include <QApplication>
+#include <QClipboard>
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QDateTime>
@@ -11,6 +12,9 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QListWidget>
+#include <QListWidgetItem>
+#include <QLineEdit>
+#include <QMap>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QScreen>
@@ -63,12 +67,22 @@ QLabel *createValueLabel(bool compact = false) {
   return label;
 }
 
+QString singleLine(const QString &text, int limit = 140) {
+  return text.simplified().left(limit);
+}
+
+QString multilinePreview(const QString &text, int limit = 320) {
+  const QString trimmed = text.trimmed();
+  return trimmed.isEmpty() ? QStringLiteral("（空）") : trimmed.left(limit);
+}
+
 } // namespace
 
 MainWindow::MainWindow(const QString &artifactsDir, QWidget *parent)
     : QMainWindow(parent), m_diagnostics(artifactsDir), m_actionExecutor(artifactsDir) {
   buildUi();
   positionOnPrimaryScreen();
+  refreshMailContext();
   refreshSnapshot();
   analyzeCurrentScenario();
 }
@@ -86,6 +100,7 @@ void MainWindow::buildUi() {
   auto *nav = new QListWidget;
   nav->setFixedWidth(136);
   nav->addItems({QStringLiteral("概览"),
+                 QStringLiteral("邮件整理"),
                  QStringLiteral("打印修复"),
                  QStringLiteral("常见问题"),
                  QStringLiteral("执行记录")});
@@ -139,12 +154,20 @@ void MainWindow::buildUi() {
 
   m_stack = new QStackedWidget;
   m_stack->addWidget(buildOverviewPage());
+  m_stack->addWidget(buildMailPage());
   m_stack->addWidget(buildPrinterPage());
   m_stack->addWidget(buildGeneralPage());
   m_stack->addWidget(buildHistoryPage());
   mainLayout->addWidget(m_stack, 1);
 
-  connect(nav, &QListWidget::currentRowChanged, m_stack, &QStackedWidget::setCurrentIndex);
+  connect(nav, &QListWidget::currentRowChanged, this, &MainWindow::handlePageChanged);
+  if (QGuiApplication::clipboard()) {
+    connect(QGuiApplication::clipboard(),
+            &QClipboard::dataChanged,
+            this,
+            &MainWindow::refreshMailContext);
+  }
+  handlePageChanged(0);
 
   rootLayout->addWidget(mainArea, 1);
   setCentralWidget(root);
@@ -281,11 +304,131 @@ QWidget *MainWindow::buildOverviewPage() {
   auto *actionsCard = createCard(QStringLiteral("建议动作"));
   auto *actionsLayout = qobject_cast<QVBoxLayout *>(actionsCard->layout());
   m_recommendedActionList = new QListWidget;
+  connect(m_recommendedActionList,
+          &QListWidget::currentItemChanged,
+          this,
+          [this](QListWidgetItem *current) {
+            previewAction(current ? current->data(Qt::UserRole).toString() : QString());
+          });
   connect(m_recommendedActionList, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem *item) {
     runAction(item->data(Qt::UserRole).toString());
   });
   actionsLayout->addWidget(m_recommendedActionList);
+  m_actionPreviewView = new QTextEdit;
+  m_actionPreviewView->setReadOnly(true);
+  m_actionPreviewView->setMinimumHeight(140);
+  actionsLayout->addWidget(m_actionPreviewView);
   layout->addWidget(actionsCard, 1);
+
+  return page;
+}
+
+QWidget *MainWindow::buildMailPage() {
+  auto *page = new QWidget;
+  auto *layout = new QVBoxLayout(page);
+  layout->setSpacing(14);
+
+  auto *intentCard = createCard(QStringLiteral("邮件整理"));
+  auto *intentLayout = qobject_cast<QVBoxLayout *>(intentCard->layout());
+  m_mailIntentHintLabel = createValueLabel(true);
+  m_mailIntentHintLabel->setText(QStringLiteral("写一句要发什么，下面会自动整理收件人、主题和正文。"));
+  intentLayout->addWidget(m_mailIntentHintLabel);
+
+  m_mailIntentEdit = new QLineEdit;
+  m_mailIntentEdit->setPlaceholderText(QStringLiteral("例如：给同事发一封打印问题跟进邮件"));
+  intentLayout->addWidget(m_mailIntentEdit);
+
+  auto *toolbar = new QHBoxLayout;
+  auto *refreshMailButton = new QPushButton(QStringLiteral("重新采集"));
+  connect(refreshMailButton, &QPushButton::clicked, this, &MainWindow::refreshMailContext);
+  toolbar->addWidget(refreshMailButton);
+
+  auto *generateMailButton = new QPushButton(QStringLiteral("生成草稿"));
+  connect(generateMailButton, &QPushButton::clicked, this, &MainWindow::generateMailDraft);
+  toolbar->addWidget(generateMailButton);
+
+  auto *copySubjectButton = new QPushButton(QStringLiteral("复制主题"));
+  connect(copySubjectButton, &QPushButton::clicked, this, [this]() {
+    if (m_mailSubjectEdit) {
+      QGuiApplication::clipboard()->setText(m_mailSubjectEdit->text().trimmed());
+    }
+  });
+  toolbar->addWidget(copySubjectButton);
+
+  auto *copyBodyButton = new QPushButton(QStringLiteral("复制正文"));
+  connect(copyBodyButton, &QPushButton::clicked, this, [this]() {
+    if (m_mailBodyEdit) {
+      QGuiApplication::clipboard()->setText(m_mailBodyEdit->toPlainText().trimmed());
+    }
+  });
+  toolbar->addWidget(copyBodyButton);
+
+  auto *copyAllButton = new QPushButton(QStringLiteral("复制整封草稿"));
+  connect(copyAllButton, &QPushButton::clicked, this, [this]() {
+    if (m_mailPreviewEdit) {
+      QGuiApplication::clipboard()->setText(m_mailPreviewEdit->toPlainText().trimmed());
+    }
+  });
+  toolbar->addWidget(copyAllButton);
+  toolbar->addStretch(1);
+  intentLayout->addLayout(toolbar);
+  layout->addWidget(intentCard);
+
+  auto *contextCard = createCard(QStringLiteral("桌面上下文"));
+  auto *contextLayout = qobject_cast<QVBoxLayout *>(contextCard->layout());
+  m_mailSessionLabel = createValueLabel(true);
+  m_mailWindowLabel = createValueLabel(true);
+  m_mailClipboardLabel = createValueLabel(true);
+  m_mailRecipientsHintLabel = createValueLabel(true);
+  contextLayout->addWidget(m_mailSessionLabel);
+  contextLayout->addWidget(m_mailWindowLabel);
+  contextLayout->addWidget(m_mailClipboardLabel);
+  contextLayout->addWidget(m_mailRecipientsHintLabel);
+  m_mailContextEdit = new QTextEdit;
+  m_mailContextEdit->setReadOnly(true);
+  m_mailContextEdit->setFixedHeight(170);
+  contextLayout->addWidget(m_mailContextEdit);
+  layout->addWidget(contextCard, 1);
+
+  auto *draftCard = createCard(QStringLiteral("草稿"));
+  auto *draftLayout = qobject_cast<QVBoxLayout *>(draftCard->layout());
+  auto *recipientRow = new QHBoxLayout;
+  recipientRow->addWidget(new QLabel(QStringLiteral("收件人建议")));
+  m_mailRecipientsEdit = new QLineEdit;
+  m_mailRecipientsEdit->setPlaceholderText(QStringLiteral("可手工调整收件人"));
+  recipientRow->addWidget(m_mailRecipientsEdit, 1);
+  draftLayout->addLayout(recipientRow);
+
+  auto *subjectRow = new QHBoxLayout;
+  subjectRow->addWidget(new QLabel(QStringLiteral("邮件主题")));
+  m_mailSubjectEdit = new QLineEdit;
+  m_mailSubjectEdit->setPlaceholderText(QStringLiteral("生成后可继续修改"));
+  subjectRow->addWidget(m_mailSubjectEdit, 1);
+  draftLayout->addLayout(subjectRow);
+
+  m_mailBodyEdit = new QTextEdit;
+  m_mailBodyEdit->setPlaceholderText(QStringLiteral("邮件正文会根据上下文自动整理。"));
+  m_mailBodyEdit->setMinimumHeight(180);
+  draftLayout->addWidget(m_mailBodyEdit);
+
+  m_mailDraftHintLabel = createValueLabel(true);
+  draftLayout->addWidget(m_mailDraftHintLabel);
+
+  m_mailPreviewEdit = new QTextEdit;
+  m_mailPreviewEdit->setReadOnly(true);
+  m_mailPreviewEdit->setMinimumHeight(140);
+  draftLayout->addWidget(m_mailPreviewEdit);
+  layout->addWidget(draftCard, 1);
+
+  connect(m_mailIntentEdit, &QLineEdit::textChanged, this, &MainWindow::generateMailDraft);
+  connect(m_mailRecipientsEdit, &QLineEdit::textChanged, this, [this]() {
+    if (m_mailDraftHintLabel) {
+      m_mailDraftHintLabel->setText(QStringLiteral("可继续手工调整收件人，预览会同步更新。"));
+    }
+    updateMailDraftView();
+  });
+  connect(m_mailSubjectEdit, &QLineEdit::textChanged, this, [this]() { updateMailDraftView(); });
+  connect(m_mailBodyEdit, &QTextEdit::textChanged, this, [this]() { updateMailDraftView(); });
 
   return page;
 }
@@ -389,6 +532,16 @@ QPushButton *MainWindow::createActionButton(const QString &label,
   return button;
 }
 
+void MainWindow::handlePageChanged(int index) {
+  if (m_stack) {
+    m_stack->setCurrentIndex(index);
+  }
+
+  if (index == 1) {
+    refreshMailContext();
+  }
+}
+
 void MainWindow::positionOnPrimaryScreen() {
   if (!QGuiApplication::primaryScreen()) {
     return;
@@ -408,6 +561,7 @@ void MainWindow::refreshSnapshot() {
   QApplication::restoreOverrideCursor();
   updateSnapshotView();
   analyzeCurrentScenario();
+  generateMailDraft();
   appendLog(QStringLiteral("刷新诊断"),
             QStringLiteral("已重新采集系统、打印、网络和音频状态。"));
 }
@@ -418,6 +572,7 @@ void MainWindow::analyzeCurrentScenario() {
                                                 : QString(),
                                      m_snapshot);
   updateAnalysisView();
+  generateMailDraft();
 }
 
 void MainWindow::updateSnapshotView() {
@@ -426,28 +581,64 @@ void MainWindow::updateSnapshotView() {
   }
 
   m_systemLabel->setText(
-      QStringLiteral("系统：%1\n内核：%2")
-          .arg(m_snapshot.distroName, m_snapshot.kernelVersion));
+      QStringLiteral("系统：%1\n内核：%2\n默认打印机：%3")
+          .arg(m_snapshot.distroName,
+               m_snapshot.kernelVersion,
+               m_snapshot.defaultPrinter.isEmpty() ? QStringLiteral("无")
+                                                   : m_snapshot.defaultPrinter));
   m_diskLabel->setText(QStringLiteral("根分区：%1").arg(m_snapshot.rootDiskUsage));
-  m_memoryLabel->setText(QStringLiteral("内存：%1").arg(m_snapshot.memoryUsage));
+  m_memoryLabel->setText(
+      QStringLiteral("内存：%1\n安装残留：%2")
+          .arg(m_snapshot.memoryUsage,
+               m_snapshot.hasInstallAttention ? QStringLiteral("需要处理")
+                                              : QStringLiteral("未见异常")));
   m_networkLabel->setText(
-      QStringLiteral("网络：\n%1\n\nNetworkManager：%2")
-          .arg(m_snapshot.networkSummary, m_snapshot.networkManagerState));
-  m_audioLabel->setText(QStringLiteral("音频：\n%1").arg(m_snapshot.audioState));
-  m_cupsLabel->setText(QStringLiteral("cups：%1").arg(m_snapshot.cupsState));
-  m_queueLabel->setText(QStringLiteral("打印队列：\n%1")
-                            .arg(m_snapshot.printerQueues.left(640)));
+      QStringLiteral("网络：\n%1\n\nNetworkManager：%2\n接口数：%3")
+          .arg(m_snapshot.networkSummary,
+               m_snapshot.networkManagerState,
+               QString::number(m_snapshot.networkInterfaceCount)));
+  m_audioLabel->setText(
+      QStringLiteral("音频：\n%1\n\n默认输出：%2\n默认输入：%3")
+          .arg(m_snapshot.audioState,
+               m_snapshot.defaultAudioSink.isEmpty() ? QStringLiteral("无")
+                                                     : m_snapshot.defaultAudioSink,
+               m_snapshot.defaultAudioSource.isEmpty() ? QStringLiteral("无")
+                                                       : m_snapshot.defaultAudioSource));
+  m_cupsLabel->setText(
+      QStringLiteral("cups：%1\n默认打印机：%2")
+          .arg(m_snapshot.cupsState,
+               m_snapshot.defaultPrinter.isEmpty() ? QStringLiteral("无")
+                                                   : m_snapshot.defaultPrinter));
+  m_queueLabel->setText(
+      QStringLiteral("打印队列（%1）：\n%2")
+          .arg(m_snapshot.printerQueueCount)
+          .arg(m_snapshot.printerQueues.left(640)));
   m_printerDevicesLabel->setText(QStringLiteral("可见打印设备：\n%1")
                                      .arg(m_snapshot.printerDevices.left(420)));
-  m_findingsEdit->setPlainText(m_snapshot.findings.isEmpty()
+  QStringList findings = m_snapshot.findings;
+  if (m_snapshot.hasNetworkAttention) {
+    findings << QStringLiteral("网络链路需要额外关注。");
+  }
+  if (m_snapshot.hasAudioAttention) {
+    findings << QStringLiteral("音频会话需要额外关注。");
+  }
+  if (m_snapshot.hasInstallAttention) {
+    findings << QStringLiteral("包管理状态需要额外关注。");
+  }
+  m_findingsEdit->setPlainText(findings.isEmpty()
                                    ? QStringLiteral("当前没有新的异常提示。")
-                                   : m_snapshot.findings.join(QStringLiteral("\n")));
+                                   : findings.join(QStringLiteral("\n")));
 }
 
 void MainWindow::updateAnalysisView() {
   m_planTitleLabel->setText(m_analysis.title);
-  m_planSummaryLabel->setText(m_analysis.summary);
-  m_riskLabel->setText(QStringLiteral("风险等级：%1").arg(m_analysis.riskLevel));
+  m_planSummaryLabel->setText(
+      QStringLiteral("%1\n\n执行前说明：%2")
+          .arg(m_analysis.summary, m_analysis.previewText));
+  m_riskLabel->setText(
+      QStringLiteral("风险等级：%1 | 可用动作：%2")
+          .arg(m_analysis.riskLevel)
+          .arg(m_analysis.supportedActionIds.size()));
   m_stageList->clear();
   m_stageList->addItems(m_analysis.stages);
   m_commandHintList->clear();
@@ -459,6 +650,143 @@ void MainWindow::updateAnalysisView() {
     auto *item = new QListWidgetItem(actionLabel(actionId), m_recommendedActionList);
     item->setData(Qt::UserRole, actionId);
   }
+  if (!m_analysis.recommendedActionIds.isEmpty()) {
+    previewAction(m_analysis.recommendedActionIds.first());
+    m_recommendedActionList->setCurrentRow(0);
+  } else {
+    previewAction(QString());
+  }
+}
+
+void MainWindow::refreshMailContext() {
+  m_desktopContext = m_contextCollector.collect();
+  updateMailContextView();
+  generateMailDraft();
+}
+
+void MainWindow::generateMailDraft() {
+  if (!m_mailIntentEdit) {
+    return;
+  }
+
+  m_emailDraft = m_emailComposer.compose(m_mailIntentEdit->text().trimmed(),
+                                         m_desktopContext,
+                                         m_snapshot,
+                                         m_analysis);
+  if (m_mailRecipientsEdit) {
+    m_mailRecipientsEdit->setText(m_emailDraft.recipients);
+  }
+  if (m_mailSubjectEdit) {
+    m_mailSubjectEdit->setText(m_emailDraft.subject);
+  }
+  if (m_mailBodyEdit) {
+    m_mailBodyEdit->setPlainText(m_emailDraft.body);
+  }
+  updateMailDraftView();
+}
+
+void MainWindow::previewAction(const QString &actionId) {
+  if (!m_actionPreviewView) {
+    return;
+  }
+
+  if (actionId.isEmpty()) {
+    m_actionPreviewView->setPlainText(m_analysis.previewText);
+    return;
+  }
+
+  QStringList lines;
+  lines << QStringLiteral("动作：%1").arg(actionLabel(actionId))
+        << QStringLiteral("场景：%1").arg(m_analysis.scenario)
+        << QString();
+
+  if (!m_analysis.previewText.isEmpty()) {
+    lines << m_analysis.previewText << QString();
+  }
+
+  if (!m_analysis.previewCommands.isEmpty()) {
+    lines << QStringLiteral("预览命令：");
+    for (const auto &command : m_analysis.previewCommands) {
+      lines << QStringLiteral("- %1").arg(command);
+    }
+    lines << QString();
+  }
+
+  if (!m_analysis.manualAuthCommands.isEmpty()) {
+    lines << QStringLiteral("需要授权时会执行：");
+    for (const auto &command : m_analysis.manualAuthCommands) {
+      lines << QStringLiteral("- %1").arg(command);
+    }
+  }
+
+  m_actionPreviewView->setPlainText(lines.join(QStringLiteral("\n")));
+}
+
+void MainWindow::updateMailContextView() {
+  if (!m_mailContextEdit) {
+    return;
+  }
+
+  m_mailSessionLabel->setText(
+      QStringLiteral("会话：%1 | 用户：%2@%3")
+          .arg(m_desktopContext.sessionType.isEmpty() ? QStringLiteral("unknown")
+                                                      : m_desktopContext.sessionType,
+               m_desktopContext.userName.isEmpty() ? QStringLiteral("unknown")
+                                                   : m_desktopContext.userName,
+               m_desktopContext.hostName.isEmpty() ? QStringLiteral("unknown")
+                                                   : m_desktopContext.hostName));
+  m_mailWindowLabel->setText(
+      QStringLiteral("活动窗口：%1\n窗口类别：%2")
+          .arg(singleLine(m_desktopContext.activeWindowTitle, 120),
+               m_desktopContext.activeWindowClass.isEmpty()
+                   ? QStringLiteral("unknown")
+                   : m_desktopContext.activeWindowClass));
+  m_mailClipboardLabel->setText(
+      QStringLiteral("剪贴板预览：%1")
+          .arg(multilinePreview(m_desktopContext.clipboardText, 160)));
+  m_mailRecipientsHintLabel->setText(
+      m_desktopContext.notes.isEmpty()
+          ? QStringLiteral("当前上下文已就绪，可以直接整理一版邮件。")
+          : m_desktopContext.notes.join(QStringLiteral("\n")));
+
+  QStringList lines;
+  lines << QStringLiteral("采集时间：%1").arg(m_desktopContext.collectedAt)
+        << QStringLiteral("会话类型：%1").arg(m_desktopContext.sessionType)
+        << QStringLiteral("活动窗口：%1").arg(m_desktopContext.activeWindowTitle)
+        << QStringLiteral("窗口类别：%1").arg(m_desktopContext.activeWindowClass)
+        << QStringLiteral("剪贴板：%1")
+               .arg(multilinePreview(m_desktopContext.clipboardText, 240));
+  m_mailContextEdit->setPlainText(lines.join(QStringLiteral("\n")));
+}
+
+void MainWindow::updateMailDraftView() {
+  if (!m_mailRecipientsEdit || !m_mailSubjectEdit || !m_mailBodyEdit ||
+      !m_mailPreviewEdit || !m_mailDraftHintLabel) {
+    return;
+  }
+
+  const QString preview =
+      QStringLiteral("收件人：%1\n抄送：%2\n主题：%3\n\n%4")
+          .arg(m_mailRecipientsEdit->text().trimmed().isEmpty()
+                   ? m_emailDraft.recipients
+                   : m_mailRecipientsEdit->text().trimmed(),
+               m_emailDraft.cc.isEmpty() ? QStringLiteral("（按需补充）")
+                                         : m_emailDraft.cc,
+               m_mailSubjectEdit->text().trimmed().isEmpty()
+                   ? m_emailDraft.subject
+                   : m_mailSubjectEdit->text().trimmed(),
+               m_mailBodyEdit->toPlainText().trimmed().isEmpty()
+                   ? m_emailDraft.body
+                   : m_mailBodyEdit->toPlainText().trimmed());
+  m_mailPreviewEdit->setPlainText(preview);
+
+  QStringList hints;
+  hints << m_emailDraft.rationale;
+  if (!m_emailDraft.extractedTopics.isEmpty()) {
+    hints << QStringLiteral("抓到的重点：%1")
+                 .arg(m_emailDraft.extractedTopics.join(QStringLiteral(" / ")));
+  }
+  m_mailDraftHintLabel->setText(hints.join(QStringLiteral("\n")));
 }
 
 void MainWindow::runAction(const QString &actionId) {
@@ -469,19 +797,40 @@ void MainWindow::runAction(const QString &actionId) {
                                             m_snapshot,
                                             m_analysis);
 
-  QString body = outcome.summary;
-  if (!outcome.commandHint.isEmpty()) {
-    body.append(QStringLiteral("\n%1").arg(outcome.commandHint));
+  QStringList bodyLines;
+  bodyLines << QStringLiteral("场景：%1").arg(outcome.scenarioLabel)
+            << outcome.summary;
+  if (!outcome.previewText.isEmpty()) {
+    bodyLines << QString() << QStringLiteral("执行前说明：") << outcome.previewText;
   }
-  if (!outcome.artifactPath.isEmpty()) {
-    body.append(QStringLiteral("\n%1").arg(outcome.artifactPath));
+  if (!outcome.previewCommands.isEmpty()) {
+    bodyLines << QString() << QStringLiteral("命令 / 步骤：");
+    for (const auto &command : outcome.previewCommands) {
+      bodyLines << QStringLiteral("- %1").arg(command);
+    }
+  }
+  if (!outcome.manualAuthCommands.isEmpty()) {
+    bodyLines << QString() << QStringLiteral("授权命令：");
+    for (const auto &command : outcome.manualAuthCommands) {
+      bodyLines << QStringLiteral("- %1").arg(command);
+    }
+  }
+  if (!outcome.commandHint.isEmpty()) {
+    bodyLines << QString() << outcome.commandHint;
+  }
+  if (!outcome.outputPaths.isEmpty()) {
+    bodyLines << QString() << QStringLiteral("导出文件：");
+    for (const auto &artifact : outcome.outputPaths) {
+      bodyLines << QStringLiteral("- %1：%2").arg(artifact.label, artifact.path);
+    }
   }
   if (!outcome.details.isEmpty()) {
-    body.append(QStringLiteral("\n\n%1").arg(outcome.details));
+    bodyLines << QString() << outcome.details;
   }
 
-  appendLog(outcome.label, body);
+  appendLog(outcome.label, bodyLines.join(QStringLiteral("\n")));
   reloadArtifactList();
+  refreshSnapshot();
 }
 
 void MainWindow::appendLog(const QString &title, const QString &body) {
