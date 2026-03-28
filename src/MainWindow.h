@@ -39,6 +39,7 @@ private slots:
   void handlePageChanged(int index);
   void refreshMailContext();
   void generateMailDraft();
+  void generateMailDraftForced();
   void exportMailDraft();
   void exportMailContext();
   void captureMailScreenshot();
@@ -64,6 +65,7 @@ private:
   void updateNavItemStyles();
   void appendLog(const QString &title, const QString &body);
   void reloadArtifactList();
+  void updateArtifactPreview();
   void positionOnPrimaryScreen();
   QString currentScenario() const;
   QString timestamp() const;
@@ -86,6 +88,11 @@ private:
   bool m_pinned = true;
   bool m_allowClose = false;
   bool m_refreshQueued = false;
+  bool m_mailDraftApplying = false;
+  bool m_mailDraftInitialized = false;
+  bool m_mailRecipientsDirty = false;
+  bool m_mailSubjectDirty = false;
+  bool m_mailBodyDirty = false;
 
   QFutureWatcher<DiagnosticSnapshot> *m_snapshotWatcher = nullptr;
   QPushButton *m_refreshButton = nullptr;
@@ -109,8 +116,10 @@ private:
   QLabel *m_planSummaryLabel = nullptr;
   QLabel *m_riskLabel = nullptr;
   QLabel *m_artifactSummaryLabel = nullptr;
+  QLabel *m_artifactMetaLabel = nullptr;
   QTextEdit *m_findingsEdit = nullptr;
   QTextEdit *m_actionPreviewView = nullptr;
+  QTextEdit *m_artifactPreviewView = nullptr;
   QListWidget *m_navList = nullptr;
   QComboBox *m_artifactFilterBox = nullptr;
   QLineEdit *m_mailIntentEdit = nullptr;

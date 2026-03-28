@@ -41,6 +41,7 @@ private:
   QString hoverFooter() const;
 
   bool m_hovered = false;
+  bool m_trackingPress = false;
   bool m_dragging = false;
   bool m_pressed = false;
   qreal m_clickFlash = 0.0;

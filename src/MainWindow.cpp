@@ -8,6 +8,7 @@
 #include <QDesktopServices>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QFrame>
 #include <QGuiApplication>
 #include <QGridLayout>
@@ -24,6 +25,7 @@
 #include <QPushButton>
 #include <QPixmap>
 #include <QFutureWatcher>
+#include <QScrollArea>
 #include <QScreen>
 #include <QStackedWidget>
 #include <QTextEdit>
@@ -58,13 +60,25 @@ QFrame *createCard(const QString &title) {
   auto *card = new QFrame;
   card->setObjectName(QStringLiteral("Card"));
   auto *layout = new QVBoxLayout(card);
-  layout->setContentsMargins(18, 16, 18, 16);
-  layout->setSpacing(12);
+  layout->setContentsMargins(20, 18, 20, 18);
+  layout->setSpacing(14);
 
   auto *label = new QLabel(title);
   label->setObjectName(QStringLiteral("CardTitle"));
+  label->setMinimumHeight(24);
   layout->addWidget(label);
   return card;
+}
+
+QWidget *wrapScrollablePage(QWidget *content) {
+  content->setObjectName(QStringLiteral("PageRoot"));
+  auto *scroll = new QScrollArea;
+  scroll->setObjectName(QStringLiteral("PageScroll"));
+  scroll->setFrameShape(QFrame::NoFrame);
+  scroll->setWidgetResizable(true);
+  scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  scroll->setWidget(content);
+  return scroll;
 }
 
 QWidget *createNavItemWidget(const QString &badge,
@@ -75,18 +89,18 @@ QWidget *createNavItemWidget(const QString &badge,
   frame->setProperty("selected", false);
 
   auto *layout = new QHBoxLayout(frame);
-  layout->setContentsMargins(12, 10, 12, 10);
-  layout->setSpacing(10);
+  layout->setContentsMargins(14, 12, 14, 12);
+  layout->setSpacing(12);
 
   auto *badgeLabel = new QLabel(badge);
   badgeLabel->setObjectName(QStringLiteral("NavItemBadge"));
   badgeLabel->setAlignment(Qt::AlignCenter);
-  badgeLabel->setFixedSize(34, 34);
+  badgeLabel->setFixedSize(42, 42);
   layout->addWidget(badgeLabel, 0, Qt::AlignTop);
 
   auto *textLayout = new QVBoxLayout;
   textLayout->setContentsMargins(0, 0, 0, 0);
-  textLayout->setSpacing(2);
+  textLayout->setSpacing(4);
 
   auto *titleLabel = new QLabel(title);
   titleLabel->setObjectName(QStringLiteral("NavItemTitle"));
@@ -94,18 +108,30 @@ QWidget *createNavItemWidget(const QString &badge,
 
   auto *descLabel = new QLabel(desc);
   descLabel->setObjectName(QStringLiteral("NavItemDesc"));
-  descLabel->setWordWrap(true);
+  descLabel->setWordWrap(false);
+  descLabel->setMaximumHeight(18);
+  descLabel->setVisible(!desc.trimmed().isEmpty());
   textLayout->addWidget(descLabel);
 
   layout->addLayout(textLayout, 1);
   return frame;
 }
 
+QPushButton *createHeaderActionButton(const QString &title, bool primary = false) {
+  auto *button = new QPushButton(title);
+  button->setObjectName(primary ? QStringLiteral("HeaderActionPrimary")
+                                : QStringLiteral("HeaderAction"));
+  button->setCursor(Qt::PointingHandCursor);
+  button->setMinimumHeight(40);
+  button->setMinimumWidth(primary ? 104 : 92);
+  return button;
+}
+
 QPushButton *createQuickActionButton(const QString &title, const QString &desc) {
   auto *button = new QPushButton(QStringLiteral("%1\n%2").arg(title, desc));
   button->setObjectName(QStringLiteral("QuickActionButton"));
   button->setCursor(Qt::PointingHandCursor);
-  button->setMinimumHeight(88);
+  button->setMinimumHeight(92);
   return button;
 }
 
@@ -172,8 +198,47 @@ QString artifactCategoryLabel(const QString &key) {
 QString artifactDisplayText(const QString &path) {
   QFileInfo info(path);
   const QString category = artifactCategoryLabel(artifactCategoryKey(path));
-  return QStringLiteral("[%1] %2\n%3")
-      .arg(category, info.fileName(), path);
+  const QString sizeLabel =
+      info.exists() ? QStringLiteral("%1 KB").arg(qMax<qint64>(1, (info.size() + 1023) / 1024))
+                    : QStringLiteral("未知大小");
+  const QString timeLabel =
+      info.exists() ? info.lastModified().toString(QStringLiteral("MM-dd HH:mm"))
+                    : QStringLiteral("时间未知");
+  return QStringLiteral("[%1] %2\n%3 · %4")
+      .arg(category, info.fileName(), timeLabel, sizeLabel);
+}
+
+QString artifactPreviewText(const QString &path) {
+  QFileInfo info(path);
+  if (!info.exists()) {
+    return QStringLiteral("文件不存在，可能已经被移动或删除。");
+  }
+
+  const QString suffix = info.suffix().toLower();
+  if (QStringList{QStringLiteral("png"),
+                  QStringLiteral("jpg"),
+                  QStringLiteral("jpeg"),
+                  QStringLiteral("svg"),
+                  QStringLiteral("webp")}
+          .contains(suffix)) {
+    return QStringLiteral("这是图片文件，双击可直接打开原图。\n\n路径：%1").arg(path);
+  }
+
+  QFile file(path);
+  if (!file.open(QIODevice::ReadOnly)) {
+    return QStringLiteral("文件可见，但当前无法读取内容。\n\n路径：%1").arg(path);
+  }
+
+  QByteArray bytes = file.read(6144);
+  QString text = QString::fromUtf8(bytes);
+  if (text.trimmed().isEmpty()) {
+    return QStringLiteral("文件内容为空，或当前内容不适合直接文本预览。\n\n路径：%1").arg(path);
+  }
+
+  if (file.size() > bytes.size()) {
+    text += QStringLiteral("\n\n……预览已截断，双击可打开完整文件。");
+  }
+  return text.trimmed();
 }
 
 } // namespace
@@ -195,27 +260,28 @@ MainWindow::MainWindow(const QString &artifactsDir, QWidget *parent)
 
 void MainWindow::buildUi() {
   setWindowTitle(QStringLiteral("Orbit Deepin Assistant"));
-  setMinimumSize(520, 860);
-  resize(560, 940);
+  setMinimumSize(760, 880);
+  resize(860, 960);
 
   auto *root = new QWidget;
+  root->setObjectName(QStringLiteral("ShellRoot"));
   auto *rootLayout = new QHBoxLayout(root);
   rootLayout->setContentsMargins(0, 0, 0, 0);
   rootLayout->setSpacing(0);
 
   m_navList = new QListWidget;
-  m_navList->setFixedWidth(204);
+  m_navList->setFixedWidth(156);
   m_navList->setCurrentRow(0);
   m_navList->setObjectName(QStringLiteral("NavList"));
   const QList<QPair<QString, QString>> navItems = {
-      {QStringLiteral("概览"), QStringLiteral("总览和快捷入口")},
-      {QStringLiteral("邮件整理"), QStringLiteral("草稿、上下文和截图")},
-      {QStringLiteral("打印修复"), QStringLiteral("队列、驱动和 CUPS")},
-      {QStringLiteral("常见问题"), QStringLiteral("网络、音频和安装")},
-      {QStringLiteral("执行记录"), QStringLiteral("工单、脚本和日志")}};
+      {QStringLiteral("概览"), QString()},
+      {QStringLiteral("邮件整理"), QString()},
+      {QStringLiteral("打印修复"), QString()},
+      {QStringLiteral("常见问题"), QString()},
+      {QStringLiteral("资料中心"), QString()}};
   for (int index = 0; index < navItems.size(); ++index) {
     auto *item = new QListWidgetItem(m_navList);
-    item->setSizeHint(QSize(0, 74));
+    item->setSizeHint(QSize(0, 70));
     m_navList->setItemWidget(
         item,
         createNavItemWidget(QStringLiteral("%1").arg(index + 1, 2, 10, QChar('0')),
@@ -225,46 +291,56 @@ void MainWindow::buildUi() {
   rootLayout->addWidget(m_navList);
 
   auto *mainArea = new QWidget;
+  mainArea->setObjectName(QStringLiteral("MainArea"));
   auto *mainLayout = new QVBoxLayout(mainArea);
   mainLayout->setContentsMargins(18, 18, 18, 18);
   mainLayout->setSpacing(14);
 
   auto *header = new QFrame;
   header->setObjectName(QStringLiteral("HeaderBar"));
-  auto *headerLayout = new QHBoxLayout(header);
-  headerLayout->setContentsMargins(16, 14, 16, 14);
-  headerLayout->setSpacing(10);
+  auto *headerLayout = new QVBoxLayout(header);
+  headerLayout->setContentsMargins(18, 18, 18, 18);
+  headerLayout->setSpacing(12);
 
+  auto *headerTopRow = new QHBoxLayout;
+  headerTopRow->setSpacing(12);
   auto *titleWrap = new QVBoxLayout;
+  titleWrap->setSpacing(4);
   auto *title = new QLabel(QStringLiteral("Orbit Deepin Assistant"));
   title->setObjectName(QStringLiteral("WindowTitle"));
-  m_runtimeLabel = new QLabel(QStringLiteral("原生桌面模式 · Qt6 / C++ / CMake"));
+  m_runtimeLabel = new QLabel(QStringLiteral("桌面助手已就绪，可直接整理邮件或处理系统问题。"));
   m_runtimeLabel->setObjectName(QStringLiteral("RuntimeHint"));
   titleWrap->addWidget(title);
   titleWrap->addWidget(m_runtimeLabel);
-  headerLayout->addLayout(titleWrap, 1);
+  headerTopRow->addLayout(titleWrap, 1);
+  headerLayout->addLayout(headerTopRow);
 
-  m_refreshButton = new QPushButton(QStringLiteral("刷新诊断"));
+  auto *headerActions = new QHBoxLayout;
+  headerActions->setSpacing(10);
+
+  m_refreshButton = createHeaderActionButton(QStringLiteral("刷新状态"), true);
   connect(m_refreshButton, &QPushButton::clicked, this, &MainWindow::refreshSnapshot);
-  headerLayout->addWidget(m_refreshButton);
+  headerActions->addWidget(m_refreshButton);
 
-  auto *openArtifactsButton = new QPushButton(QStringLiteral("资料目录"));
+  auto *openArtifactsButton = createHeaderActionButton(QStringLiteral("资料目录"));
   connect(openArtifactsButton,
           &QPushButton::clicked,
           this,
           &MainWindow::openArtifactsDirectory);
-  headerLayout->addWidget(openArtifactsButton);
+  headerActions->addWidget(openArtifactsButton);
 
-  auto *pinButton = new QPushButton(QStringLiteral("固定窗口"));
+  auto *pinButton = createHeaderActionButton(QStringLiteral("窗口置顶"));
   connect(pinButton, &QPushButton::clicked, this, &MainWindow::togglePinnedState);
-  headerLayout->addWidget(pinButton);
+  headerActions->addWidget(pinButton);
 
-  auto *quitButton = new QPushButton(QStringLiteral("退出"));
+  auto *quitButton = createHeaderActionButton(QStringLiteral("退出"));
   connect(quitButton, &QPushButton::clicked, this, [this]() {
     m_allowClose = true;
     emit exitRequested();
   });
-  headerLayout->addWidget(quitButton);
+  headerActions->addWidget(quitButton);
+  headerActions->addStretch(1);
+  headerLayout->addLayout(headerActions);
 
   mainLayout->addWidget(header);
 
@@ -294,42 +370,46 @@ void MainWindow::buildUi() {
 
   setStyleSheet(QStringLiteral(R"(
     QWidget {
-      background: #07111d;
       color: #d9e6f2;
       font-size: 14px;
     }
-    #HeaderBar, #Card {
-      background: #0e1a29;
-      border: 1px solid #18324c;
+    QMainWindow, QWidget#ShellRoot, QWidget#MainArea, QWidget#PageRoot, QScrollArea#PageScroll {
+      background: #07111d;
+    }
+    QLabel {
+      background: transparent;
+    }
+    #HeaderBar, #Card, QFrame#ArtifactPreviewPanel {
+      background: #0d1724;
+      border: 1px solid #17314b;
       border-radius: 18px;
     }
     #WindowTitle {
-      font-size: 22px;
+      font-size: 24px;
       font-weight: 700;
       color: #f6fbff;
     }
     #RuntimeHint {
-      color: #7ca1bf;
-      font-size: 12px;
+      color: #87a8c4;
+      font-size: 13px;
     }
     #CardTitle {
-      color: #9dddf0;
+      color: #b7dfff;
       font-weight: 700;
-      font-size: 13px;
-      letter-spacing: 1px;
+      font-size: 16px;
     }
     #MetricValue {
       color: #edf6ff;
-      line-height: 1.45;
+      line-height: 1.5;
     }
     #MetricCompact {
-      color: #b8d1e5;
+      color: #9fbdd7;
       font-size: 13px;
     }
     QListWidget#NavList {
-      background: #08111b;
+      background: #08111a;
       border: none;
-      padding-top: 20px;
+      padding-top: 18px;
       outline: 0;
     }
     QListWidget#NavList::item {
@@ -342,15 +422,15 @@ void MainWindow::buildUi() {
       border-radius: 16px;
     }
     QFrame#NavItem[selected="true"] {
-      background: #123456;
-      border-color: #2f618e;
+      background: #102133;
+      border-color: #2c6fa7;
     }
     QLabel#NavItemBadge {
       background: #102437;
-      border-radius: 17px;
+      border-radius: 21px;
       color: #9dddf0;
       font-weight: 700;
-      font-size: 12px;
+      font-size: 15px;
     }
     QFrame#NavItem[selected="true"] QLabel#NavItemBadge {
       background: #1f5f8d;
@@ -359,47 +439,82 @@ void MainWindow::buildUi() {
     QLabel#NavItemTitle {
       color: #eef7ff;
       font-weight: 700;
-      font-size: 14px;
+      font-size: 17px;
     }
     QLabel#NavItemDesc {
-      color: #7ca1bf;
+      color: #87a7c2;
       font-size: 12px;
     }
     QFrame#NavItem[selected="true"] QLabel#NavItemDesc {
       color: #d7e9f7;
     }
     QPushButton {
-      background: #113354;
-      border: 1px solid #245079;
+      background: #12263a;
+      border: 1px solid #254763;
       border-radius: 12px;
-      padding: 10px 14px;
+      min-height: 42px;
+      padding: 0 16px;
       color: #f5fbff;
     }
     QPushButton:hover {
-      background: #17446d;
+      background: #18344f;
+      border-color: #3771a1;
+    }
+    QPushButton#HeaderActionPrimary {
+      background: #164b79;
+      border-color: #2a78b8;
+    }
+    QPushButton#HeaderActionPrimary:hover {
+      background: #1b5c92;
     }
     QPushButton#QuickActionButton {
-      background: #0a1b2b;
-      border: 1px solid #214463;
+      background: #0c1b2a;
+      border: 1px solid #22425f;
       border-radius: 16px;
-      padding: 14px 16px;
+      min-height: 96px;
+      padding: 16px 18px;
       text-align: left;
+      font-size: 15px;
       font-weight: 600;
     }
     QPushButton#QuickActionButton:hover {
-      background: #10273c;
-      border-color: #2f618e;
+      background: #112335;
+      border-color: #2f6fa2;
     }
-    QComboBox, QPlainTextEdit, QTextEdit, QListWidget {
+    QComboBox, QLineEdit, QPlainTextEdit, QTextEdit, QListWidget {
       background: #091521;
       border: 1px solid #17314a;
       border-radius: 12px;
     }
-    QComboBox, QPlainTextEdit {
-      padding: 8px 10px;
+    QComboBox, QLineEdit, QPlainTextEdit {
+      min-height: 42px;
+      padding: 0 12px;
     }
     QTextEdit, QPlainTextEdit, QListWidget {
-      padding: 8px;
+      padding: 10px 12px;
+    }
+    QListWidget {
+      outline: 0;
+    }
+    QListWidget::item {
+      min-height: 34px;
+      padding: 6px 4px;
+      border-radius: 10px;
+    }
+    QListWidget::item:selected {
+      background: #11263a;
+    }
+    QComboBox QAbstractItemView {
+      background: #0b1623;
+      border: 1px solid #17314a;
+      selection-background-color: #173b59;
+      selection-color: #f6fbff;
+      outline: 0;
+    }
+    QLabel#ArtifactPreviewTitle {
+      color: #dceeff;
+      font-size: 14px;
+      font-weight: 700;
     }
   )"));
 }
@@ -407,20 +522,21 @@ void MainWindow::buildUi() {
 QWidget *MainWindow::buildOverviewPage() {
   auto *page = new QWidget;
   auto *layout = new QVBoxLayout(page);
+  layout->setContentsMargins(0, 0, 0, 8);
   layout->setSpacing(14);
 
   auto *quickCard = createCard(QStringLiteral("快捷入口"));
   auto *quickLayout = qobject_cast<QVBoxLayout *>(quickCard->layout());
   auto *quickHint = createValueLabel(true);
-  quickHint->setText(QStringLiteral("参考 UOS AI 的入口组织方式，把常用任务前置成一屏可点的入口。"));
+  quickHint->setText(QStringLiteral("先把最常用的几件事放到第一屏，进来就能直接开始。"));
   quickLayout->addWidget(quickHint);
 
   auto *quickGrid = new QGridLayout;
   quickGrid->setHorizontalSpacing(12);
   quickGrid->setVerticalSpacing(12);
 
-  auto *mailButton = createQuickActionButton(QStringLiteral("邮件整理"),
-                                             QStringLiteral("根据当前窗口和剪贴板整理草稿"));
+  auto *mailButton = createQuickActionButton(QStringLiteral("整理一封邮件"),
+                                             QStringLiteral("采集当前窗口和剪贴板，直接起草"));
   connect(mailButton, &QPushButton::clicked, this, [this]() {
     if (m_navList) {
       m_navList->setCurrentRow(1);
@@ -430,34 +546,22 @@ QWidget *MainWindow::buildOverviewPage() {
   });
   quickGrid->addWidget(mailButton, 0, 0);
 
-  auto *printerButton = createQuickActionButton(QStringLiteral("打印修复"),
-                                                QStringLiteral("直接进入队列、驱动和 CUPS 修复链"));
+  auto *printerButton = createQuickActionButton(QStringLiteral("刷新本机状态"),
+                                                QStringLiteral("重新采集系统、打印、网络和音频状态"));
   connect(printerButton, &QPushButton::clicked, this, [this]() {
-    if (m_scenarioBox) {
-      m_scenarioBox->setCurrentText(QStringLiteral("驱动与过滤链异常"));
-    }
-    if (m_navList) {
-      m_navList->setCurrentRow(2);
-    }
-    analyzeCurrentScenario();
+    refreshSnapshot();
   });
   quickGrid->addWidget(printerButton, 0, 1);
 
-  auto *generalButton = createQuickActionButton(QStringLiteral("常见问题"),
-                                                QStringLiteral("切到网络、音频和安装问题处理"));
+  auto *generalButton = createQuickActionButton(QStringLiteral("导出诊断工单"),
+                                                QStringLiteral("把当前判断、阶段和命令整理成一份材料"));
   connect(generalButton, &QPushButton::clicked, this, [this]() {
-    if (m_scenarioBox) {
-      m_scenarioBox->setCurrentText(QStringLiteral("网络异常"));
-    }
-    if (m_navList) {
-      m_navList->setCurrentRow(3);
-    }
-    analyzeCurrentScenario();
+    runAction(QStringLiteral("export-workorder"));
   });
   quickGrid->addWidget(generalButton, 1, 0);
 
-  auto *historyButton = createQuickActionButton(QStringLiteral("执行记录"),
-                                                QStringLiteral("回看工单、脚本、日志和截图材料"));
+  auto *historyButton = createQuickActionButton(QStringLiteral("打开资料中心"),
+                                                QStringLiteral("查看工单、脚本、日志、草稿和截图"));
   connect(historyButton, &QPushButton::clicked, this, [this]() {
     if (m_navList) {
       m_navList->setCurrentRow(4);
@@ -538,12 +642,14 @@ QWidget *MainWindow::buildOverviewPage() {
   actionsLayout->addWidget(m_actionPreviewView);
   layout->addWidget(actionsCard, 1);
 
-  return page;
+  layout->addStretch(1);
+  return wrapScrollablePage(page);
 }
 
 QWidget *MainWindow::buildMailPage() {
   auto *page = new QWidget;
   auto *layout = new QVBoxLayout(page);
+  layout->setContentsMargins(0, 0, 0, 8);
   layout->setSpacing(14);
 
   auto *intentCard = createCard(QStringLiteral("邮件整理"));
@@ -556,26 +662,28 @@ QWidget *MainWindow::buildMailPage() {
   m_mailIntentEdit->setPlaceholderText(QStringLiteral("例如：给同事发一封打印问题跟进邮件"));
   intentLayout->addWidget(m_mailIntentEdit);
 
-  auto *toolbar = new QHBoxLayout;
+  auto *toolbar = new QGridLayout;
+  toolbar->setHorizontalSpacing(10);
+  toolbar->setVerticalSpacing(10);
   auto *refreshMailButton = new QPushButton(QStringLiteral("重新采集"));
   connect(refreshMailButton, &QPushButton::clicked, this, &MainWindow::refreshMailContext);
-  toolbar->addWidget(refreshMailButton);
+  toolbar->addWidget(refreshMailButton, 0, 0);
 
   auto *generateMailButton = new QPushButton(QStringLiteral("生成草稿"));
-  connect(generateMailButton, &QPushButton::clicked, this, &MainWindow::generateMailDraft);
-  toolbar->addWidget(generateMailButton);
+  connect(generateMailButton, &QPushButton::clicked, this, &MainWindow::generateMailDraftForced);
+  toolbar->addWidget(generateMailButton, 0, 1);
 
   auto *exportContextButton = new QPushButton(QStringLiteral("导出上下文"));
   connect(exportContextButton, &QPushButton::clicked, this, &MainWindow::exportMailContext);
-  toolbar->addWidget(exportContextButton);
+  toolbar->addWidget(exportContextButton, 0, 2);
 
   auto *captureButton = new QPushButton(QStringLiteral("截取当前屏幕"));
   connect(captureButton, &QPushButton::clicked, this, &MainWindow::captureMailScreenshot);
-  toolbar->addWidget(captureButton);
+  toolbar->addWidget(captureButton, 0, 3);
 
   auto *exportDraftButton = new QPushButton(QStringLiteral("导出草稿"));
   connect(exportDraftButton, &QPushButton::clicked, this, &MainWindow::exportMailDraft);
-  toolbar->addWidget(exportDraftButton);
+  toolbar->addWidget(exportDraftButton, 1, 0);
 
   auto *copySubjectButton = new QPushButton(QStringLiteral("复制主题"));
   connect(copySubjectButton, &QPushButton::clicked, this, [this]() {
@@ -583,7 +691,7 @@ QWidget *MainWindow::buildMailPage() {
       QGuiApplication::clipboard()->setText(m_mailSubjectEdit->text().trimmed());
     }
   });
-  toolbar->addWidget(copySubjectButton);
+  toolbar->addWidget(copySubjectButton, 1, 1);
 
   auto *copyBodyButton = new QPushButton(QStringLiteral("复制正文"));
   connect(copyBodyButton, &QPushButton::clicked, this, [this]() {
@@ -591,7 +699,7 @@ QWidget *MainWindow::buildMailPage() {
       QGuiApplication::clipboard()->setText(m_mailBodyEdit->toPlainText().trimmed());
     }
   });
-  toolbar->addWidget(copyBodyButton);
+  toolbar->addWidget(copyBodyButton, 1, 2);
 
   auto *copyAllButton = new QPushButton(QStringLiteral("复制整封草稿"));
   connect(copyAllButton, &QPushButton::clicked, this, [this]() {
@@ -599,8 +707,7 @@ QWidget *MainWindow::buildMailPage() {
       QGuiApplication::clipboard()->setText(m_mailPreviewEdit->toPlainText().trimmed());
     }
   });
-  toolbar->addWidget(copyAllButton);
-  toolbar->addStretch(1);
+  toolbar->addWidget(copyAllButton, 1, 3);
   intentLayout->addLayout(toolbar);
   layout->addWidget(intentCard);
 
@@ -655,20 +762,35 @@ QWidget *MainWindow::buildMailPage() {
 
   connect(m_mailIntentEdit, &QLineEdit::textChanged, this, &MainWindow::generateMailDraft);
   connect(m_mailRecipientsEdit, &QLineEdit::textChanged, this, [this]() {
+    if (!m_mailDraftApplying) {
+      m_mailRecipientsDirty = true;
+    }
     if (m_mailDraftHintLabel) {
       m_mailDraftHintLabel->setText(QStringLiteral("可继续手工调整收件人，预览会同步更新。"));
     }
     updateMailDraftView();
   });
-  connect(m_mailSubjectEdit, &QLineEdit::textChanged, this, [this]() { updateMailDraftView(); });
-  connect(m_mailBodyEdit, &QTextEdit::textChanged, this, [this]() { updateMailDraftView(); });
+  connect(m_mailSubjectEdit, &QLineEdit::textChanged, this, [this]() {
+    if (!m_mailDraftApplying) {
+      m_mailSubjectDirty = true;
+    }
+    updateMailDraftView();
+  });
+  connect(m_mailBodyEdit, &QTextEdit::textChanged, this, [this]() {
+    if (!m_mailDraftApplying) {
+      m_mailBodyDirty = true;
+    }
+    updateMailDraftView();
+  });
 
-  return page;
+  layout->addStretch(1);
+  return wrapScrollablePage(page);
 }
 
 QWidget *MainWindow::buildPrinterPage() {
   auto *page = new QWidget;
   auto *layout = new QVBoxLayout(page);
+  layout->setContentsMargins(0, 0, 0, 8);
   layout->setSpacing(14);
 
   auto *statusCard = createCard(QStringLiteral("打印链路状态"));
@@ -683,13 +805,24 @@ QWidget *MainWindow::buildPrinterPage() {
 
   auto *actionsCard = createCard(QStringLiteral("打印修复动作"));
   auto *actionsLayout = qobject_cast<QVBoxLayout *>(actionsCard->layout());
-  actionsLayout->addWidget(createActionButton(QStringLiteral("收集支持包"), QStringLiteral("collect-support-bundle")));
-  actionsLayout->addWidget(createActionButton(QStringLiteral("导出诊断工单"), QStringLiteral("export-workorder")));
-  actionsLayout->addWidget(createActionButton(QStringLiteral("清空打印队列"), QStringLiteral("clear-print-queue")));
-  actionsLayout->addWidget(createActionButton(QStringLiteral("重启 CUPS"), QStringLiteral("restart-cups")));
-  actionsLayout->addWidget(createActionButton(QStringLiteral("删除旧队列"), QStringLiteral("delete-old-queues")));
-  actionsLayout->addWidget(createActionButton(QStringLiteral("重装关键打印组件"), QStringLiteral("reinstall-print-stack")));
-  actionsLayout->addWidget(createActionButton(QStringLiteral("修复 CUPS 过滤链权限"), QStringLiteral("repair-cups-permissions")));
+  auto *printerGrid = new QGridLayout;
+  printerGrid->setHorizontalSpacing(10);
+  printerGrid->setVerticalSpacing(10);
+  const QList<QPair<QString, QString>> printerActions = {
+      {QStringLiteral("收集支持包"), QStringLiteral("collect-support-bundle")},
+      {QStringLiteral("导出诊断工单"), QStringLiteral("export-workorder")},
+      {QStringLiteral("清空打印队列"), QStringLiteral("clear-print-queue")},
+      {QStringLiteral("重启 CUPS"), QStringLiteral("restart-cups")},
+      {QStringLiteral("删除旧队列"), QStringLiteral("delete-old-queues")},
+      {QStringLiteral("重装关键打印组件"), QStringLiteral("reinstall-print-stack")},
+      {QStringLiteral("修复 CUPS 过滤链权限"), QStringLiteral("repair-cups-permissions")}};
+  for (int index = 0; index < printerActions.size(); ++index) {
+    printerGrid->addWidget(createActionButton(printerActions[index].first,
+                                              printerActions[index].second),
+                           index / 2,
+                           index % 2);
+  }
+  actionsLayout->addLayout(printerGrid);
   layout->addWidget(actionsCard, 1);
 
   auto *findingsCard = createCard(QStringLiteral("当前发现"));
@@ -699,12 +832,14 @@ QWidget *MainWindow::buildPrinterPage() {
   findingsLayout->addWidget(m_findingsEdit);
   layout->addWidget(findingsCard, 1);
 
-  return page;
+  layout->addStretch(1);
+  return wrapScrollablePage(page);
 }
 
 QWidget *MainWindow::buildGeneralPage() {
   auto *page = new QWidget;
   auto *layout = new QVBoxLayout(page);
+  layout->setContentsMargins(0, 0, 0, 8);
   layout->setSpacing(14);
 
   auto *systemCard = createCard(QStringLiteral("系统快照"));
@@ -723,26 +858,40 @@ QWidget *MainWindow::buildGeneralPage() {
 
   auto *actionsCard = createCard(QStringLiteral("常见问题动作"));
   auto *actionsLayout = qobject_cast<QVBoxLayout *>(actionsCard->layout());
-  actionsLayout->addWidget(createActionButton(QStringLiteral("导出网络检查"), QStringLiteral("export-network-check")));
-  actionsLayout->addWidget(createActionButton(QStringLiteral("重启 NetworkManager"), QStringLiteral("restart-network-manager")));
-  actionsLayout->addWidget(createActionButton(QStringLiteral("导出音频检查"), QStringLiteral("export-audio-check")));
-  actionsLayout->addWidget(createActionButton(QStringLiteral("重启音频会话"), QStringLiteral("restart-audio-session")));
-  actionsLayout->addWidget(createActionButton(QStringLiteral("导出安装检查"), QStringLiteral("export-install-check")));
-  actionsLayout->addWidget(createActionButton(QStringLiteral("修复软件包状态"), QStringLiteral("repair-package-state")));
+  auto *generalGrid = new QGridLayout;
+  generalGrid->setHorizontalSpacing(10);
+  generalGrid->setVerticalSpacing(10);
+  const QList<QPair<QString, QString>> generalActions = {
+      {QStringLiteral("导出网络检查"), QStringLiteral("export-network-check")},
+      {QStringLiteral("重启 NetworkManager"), QStringLiteral("restart-network-manager")},
+      {QStringLiteral("导出音频检查"), QStringLiteral("export-audio-check")},
+      {QStringLiteral("重启音频会话"), QStringLiteral("restart-audio-session")},
+      {QStringLiteral("导出安装检查"), QStringLiteral("export-install-check")},
+      {QStringLiteral("修复软件包状态"), QStringLiteral("repair-package-state")}};
+  for (int index = 0; index < generalActions.size(); ++index) {
+    generalGrid->addWidget(createActionButton(generalActions[index].first,
+                                              generalActions[index].second),
+                           index / 2,
+                           index % 2);
+  }
+  actionsLayout->addLayout(generalGrid);
   layout->addWidget(actionsCard, 1);
 
-  return page;
+  layout->addStretch(1);
+  return wrapScrollablePage(page);
 }
 
 QWidget *MainWindow::buildHistoryPage() {
   auto *page = new QWidget;
   auto *layout = new QVBoxLayout(page);
+  layout->setContentsMargins(0, 0, 0, 8);
   layout->setSpacing(14);
 
   auto *logCard = createCard(QStringLiteral("执行日志"));
   auto *logLayout = qobject_cast<QVBoxLayout *>(logCard->layout());
   m_logView = new QTextEdit;
   m_logView->setReadOnly(true);
+  m_logView->setMinimumHeight(180);
   logLayout->addWidget(m_logView);
   layout->addWidget(logCard, 1);
 
@@ -767,14 +916,50 @@ QWidget *MainWindow::buildHistoryPage() {
   connect(reloadArtifactsButton, &QPushButton::clicked, this, &MainWindow::reloadArtifactList);
   artifactToolbar->addWidget(reloadArtifactsButton);
   artifactLayout->addLayout(artifactToolbar);
+
+  auto *artifactBody = new QHBoxLayout;
+  artifactBody->setSpacing(12);
   m_artifactList = new QListWidget;
+  m_artifactList->setObjectName(QStringLiteral("ArtifactList"));
+  connect(m_artifactList,
+          &QListWidget::currentItemChanged,
+          this,
+          [this]() { updateArtifactPreview(); });
   connect(m_artifactList, &QListWidget::itemDoubleClicked, this, [](QListWidgetItem *item) {
     QDesktopServices::openUrl(QUrl::fromLocalFile(item->data(Qt::UserRole).toString()));
   });
-  artifactLayout->addWidget(m_artifactList);
+  artifactBody->addWidget(m_artifactList, 5);
+
+  auto *previewPanel = new QFrame;
+  previewPanel->setObjectName(QStringLiteral("ArtifactPreviewPanel"));
+  auto *previewLayout = new QVBoxLayout(previewPanel);
+  previewLayout->setContentsMargins(16, 16, 16, 16);
+  previewLayout->setSpacing(10);
+  auto *previewTitle = new QLabel(QStringLiteral("内容预览"));
+  previewTitle->setObjectName(QStringLiteral("ArtifactPreviewTitle"));
+  previewLayout->addWidget(previewTitle);
+  m_artifactMetaLabel = createValueLabel(true);
+  previewLayout->addWidget(m_artifactMetaLabel);
+  m_artifactPreviewView = new QTextEdit;
+  m_artifactPreviewView->setReadOnly(true);
+  m_artifactPreviewView->setMinimumWidth(280);
+  previewLayout->addWidget(m_artifactPreviewView, 1);
+  auto *openSelectedButton = new QPushButton(QStringLiteral("打开当前资料"));
+  connect(openSelectedButton, &QPushButton::clicked, this, [this]() {
+    if (!m_artifactList || !m_artifactList->currentItem()) {
+      return;
+    }
+    QDesktopServices::openUrl(
+        QUrl::fromLocalFile(m_artifactList->currentItem()->data(Qt::UserRole).toString()));
+  });
+  previewLayout->addWidget(openSelectedButton);
+  artifactBody->addWidget(previewPanel, 5);
+
+  artifactLayout->addLayout(artifactBody, 1);
   layout->addWidget(artifactCard, 1);
 
-  return page;
+  layout->addStretch(1);
+  return wrapScrollablePage(page);
 }
 
 QPushButton *MainWindow::createActionButton(const QString &label,
@@ -827,8 +1012,8 @@ void MainWindow::positionOnPrimaryScreen() {
   }
 
   const QRect workArea = QGuiApplication::primaryScreen()->availableGeometry();
-  const int width = qMin(560, qMax(520, workArea.width() / 3));
-  const int height = qMin(960, qMax(860, workArea.height() - 32));
+  const int width = qMin(880, qMax(780, workArea.width() / 2));
+  const int height = qMin(980, qMax(880, workArea.height() - 40));
   const int x = workArea.x() + workArea.width() - width - 18;
   const int y = workArea.y() + (workArea.height() - height) / 2;
   setGeometry(x, y, width, height);
@@ -978,16 +1163,27 @@ void MainWindow::generateMailDraft() {
                                          m_desktopContext,
                                          m_snapshot,
                                          m_analysis);
-  if (m_mailRecipientsEdit) {
+  const bool shouldResetFields = !m_mailDraftInitialized;
+  m_mailDraftApplying = true;
+  if (m_mailRecipientsEdit && (!m_mailRecipientsDirty || shouldResetFields)) {
     m_mailRecipientsEdit->setText(m_emailDraft.recipients);
   }
-  if (m_mailSubjectEdit) {
+  if (m_mailSubjectEdit && (!m_mailSubjectDirty || shouldResetFields)) {
     m_mailSubjectEdit->setText(m_emailDraft.subject);
   }
-  if (m_mailBodyEdit) {
+  if (m_mailBodyEdit && (!m_mailBodyDirty || shouldResetFields)) {
     m_mailBodyEdit->setPlainText(m_emailDraft.body);
   }
+  m_mailDraftApplying = false;
+  m_mailDraftInitialized = true;
   updateMailDraftView();
+}
+
+void MainWindow::generateMailDraftForced() {
+  m_mailRecipientsDirty = false;
+  m_mailSubjectDirty = false;
+  m_mailBodyDirty = false;
+  generateMailDraft();
 }
 
 void MainWindow::previewAction(const QString &actionId) {
@@ -1143,7 +1339,7 @@ void MainWindow::setRefreshState(bool busy, const QString &statusText) {
   if (m_runtimeLabel) {
     m_runtimeLabel->setText(
         busy ? statusText
-             : QStringLiteral("原生桌面模式 · Qt6 / C++ / CMake"));
+             : QStringLiteral("桌面助手已就绪，可直接整理邮件或处理系统问题。"));
   }
 }
 
@@ -1354,6 +1550,37 @@ void MainWindow::reloadArtifactList() {
             .arg(files.size())
             .arg(visibleCount));
   }
+  if (m_artifactList->count() > 0) {
+    if (!m_artifactList->currentItem()) {
+      m_artifactList->setCurrentRow(0);
+    } else {
+      updateArtifactPreview();
+    }
+  } else {
+    updateArtifactPreview();
+  }
+}
+
+void MainWindow::updateArtifactPreview() {
+  if (!m_artifactPreviewView || !m_artifactMetaLabel) {
+    return;
+  }
+
+  if (!m_artifactList || !m_artifactList->currentItem()) {
+    m_artifactMetaLabel->setText(QStringLiteral("当前没有可预览的资料。"));
+    m_artifactPreviewView->setPlainText(QStringLiteral("刷新后可在这里查看工单、脚本、日志、草稿和截图说明。"));
+    return;
+  }
+
+  const QString path = m_artifactList->currentItem()->data(Qt::UserRole).toString();
+  const QFileInfo info(path);
+  m_artifactMetaLabel->setText(
+      QStringLiteral("类别：%1 | 文件：%2 | 修改：%3")
+          .arg(artifactCategoryLabel(artifactCategoryKey(path)),
+               info.fileName(),
+               info.exists() ? info.lastModified().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"))
+                             : QStringLiteral("未知")));
+  m_artifactPreviewView->setPlainText(artifactPreviewText(path));
 }
 
 QString MainWindow::currentScenario() const {
