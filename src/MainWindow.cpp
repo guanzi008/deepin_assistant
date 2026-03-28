@@ -21,6 +21,7 @@
 #include <QListWidgetItem>
 #include <QLineEdit>
 #include <QMap>
+#include <QMenu>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QPixmap>
@@ -29,6 +30,7 @@
 #include <QScreen>
 #include <QStackedWidget>
 #include <QTextEdit>
+#include <QToolButton>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QWindow>
@@ -195,17 +197,83 @@ QString artifactCategoryLabel(const QString &key) {
   return QStringLiteral("其他");
 }
 
+bool isImageArtifact(const QString &path) {
+  const QString suffix = QFileInfo(path).suffix().toLower();
+  return QStringList{QStringLiteral("png"),
+                     QStringLiteral("jpg"),
+                     QStringLiteral("jpeg"),
+                     QStringLiteral("svg"),
+                     QStringLiteral("webp")}
+      .contains(suffix);
+}
+
+QString artifactStateLabel(const QString &path) {
+  if (path.contains(QStringLiteral("/pending-actions/"))) {
+    return QStringLiteral("待执行");
+  }
+
+  if (!path.endsWith(QStringLiteral(".json"))) {
+    return QString();
+  }
+
+  QFile file(path);
+  if (!file.open(QIODevice::ReadOnly)) {
+    return QString();
+  }
+
+  const auto document = QJsonDocument::fromJson(file.readAll());
+  if (!document.isObject()) {
+    return QString();
+  }
+
+  const auto object = document.object();
+  if (object.value(QStringLiteral("pendingManualAuth")).toBool()) {
+    return QStringLiteral("待授权");
+  }
+  if (object.contains(QStringLiteral("result"))) {
+    const QString result = object.value(QStringLiteral("result")).toString();
+    if (result == QStringLiteral("success")) {
+      return QStringLiteral("已完成");
+    }
+    if (result == QStringLiteral("failed")) {
+      return QStringLiteral("失败");
+    }
+  }
+  if (object.contains(QStringLiteral("success"))) {
+    return object.value(QStringLiteral("success")).toBool() ? QStringLiteral("已完成")
+                                                            : QStringLiteral("失败");
+  }
+  return QString();
+}
+
+QString artifactStateColor(const QString &state) {
+  if (state == QStringLiteral("已完成")) {
+    return QStringLiteral("#70d7a5");
+  }
+  if (state == QStringLiteral("待执行") || state == QStringLiteral("待授权")) {
+    return QStringLiteral("#f0c36d");
+  }
+  if (state == QStringLiteral("失败")) {
+    return QStringLiteral("#ff7c7c");
+  }
+  return QStringLiteral("#9fbdd7");
+}
+
 QString artifactDisplayText(const QString &path) {
   QFileInfo info(path);
   const QString category = artifactCategoryLabel(artifactCategoryKey(path));
+  const QString state = artifactStateLabel(path);
   const QString sizeLabel =
       info.exists() ? QStringLiteral("%1 KB").arg(qMax<qint64>(1, (info.size() + 1023) / 1024))
                     : QStringLiteral("未知大小");
   const QString timeLabel =
       info.exists() ? info.lastModified().toString(QStringLiteral("MM-dd HH:mm"))
                     : QStringLiteral("时间未知");
+  const QString title = state.isEmpty()
+                            ? category
+                            : QStringLiteral("%1 · %2").arg(category, state);
   return QStringLiteral("[%1] %2\n%3 · %4")
-      .arg(category, info.fileName(), timeLabel, sizeLabel);
+      .arg(title, info.fileName(), timeLabel, sizeLabel);
 }
 
 QString artifactPreviewText(const QString &path) {
@@ -215,12 +283,7 @@ QString artifactPreviewText(const QString &path) {
   }
 
   const QString suffix = info.suffix().toLower();
-  if (QStringList{QStringLiteral("png"),
-                  QStringLiteral("jpg"),
-                  QStringLiteral("jpeg"),
-                  QStringLiteral("svg"),
-                  QStringLiteral("webp")}
-          .contains(suffix)) {
+  if (isImageArtifact(path)) {
     return QStringLiteral("这是图片文件，双击可直接打开原图。\n\n路径：%1").arg(path);
   }
 
@@ -230,6 +293,42 @@ QString artifactPreviewText(const QString &path) {
   }
 
   QByteArray bytes = file.read(6144);
+  if (suffix == QStringLiteral("json")) {
+    const auto document = QJsonDocument::fromJson(bytes);
+    if (document.isObject()) {
+      const auto object = document.object();
+      if (object.contains(QStringLiteral("actionLabel")) ||
+          object.contains(QStringLiteral("summary")) ||
+          object.contains(QStringLiteral("result"))) {
+        QStringList lines;
+        if (object.contains(QStringLiteral("actionLabel"))) {
+          lines << QStringLiteral("动作：%1").arg(object.value(QStringLiteral("actionLabel")).toString());
+        }
+        if (object.contains(QStringLiteral("summary"))) {
+          lines << QStringLiteral("说明：%1").arg(object.value(QStringLiteral("summary")).toString());
+        }
+        if (object.contains(QStringLiteral("result"))) {
+          lines << QStringLiteral("结果：%1").arg(object.value(QStringLiteral("result")).toString());
+        }
+        if (object.contains(QStringLiteral("exitCode"))) {
+          lines << QStringLiteral("退出码：%1").arg(object.value(QStringLiteral("exitCode")).toInt());
+        }
+        if (object.contains(QStringLiteral("logPath"))) {
+          lines << QStringLiteral("日志：%1").arg(object.value(QStringLiteral("logPath")).toString());
+        }
+        if (object.contains(QStringLiteral("commands")) &&
+            object.value(QStringLiteral("commands")).isArray()) {
+          lines << QString() << QStringLiteral("命令：");
+          const auto commands = object.value(QStringLiteral("commands")).toArray();
+          for (const auto &command : commands) {
+            lines << QStringLiteral("- %1").arg(command.toString());
+          }
+        }
+        return lines.join(QStringLiteral("\n"));
+      }
+    }
+  }
+
   QString text = QString::fromUtf8(bytes);
   if (text.trimmed().isEmpty()) {
     return QStringLiteral("文件内容为空，或当前内容不适合直接文本预览。\n\n路径：%1").arg(path);
@@ -322,23 +421,24 @@ void MainWindow::buildUi() {
   connect(m_refreshButton, &QPushButton::clicked, this, &MainWindow::refreshSnapshot);
   headerActions->addWidget(m_refreshButton);
 
-  auto *openArtifactsButton = createHeaderActionButton(QStringLiteral("资料目录"));
-  connect(openArtifactsButton,
-          &QPushButton::clicked,
-          this,
-          &MainWindow::openArtifactsDirectory);
-  headerActions->addWidget(openArtifactsButton);
-
-  auto *pinButton = createHeaderActionButton(QStringLiteral("窗口置顶"));
-  connect(pinButton, &QPushButton::clicked, this, &MainWindow::togglePinnedState);
-  headerActions->addWidget(pinButton);
-
-  auto *quitButton = createHeaderActionButton(QStringLiteral("退出"));
-  connect(quitButton, &QPushButton::clicked, this, [this]() {
+  auto *moreButton = new QToolButton;
+  moreButton->setObjectName(QStringLiteral("HeaderMenuButton"));
+  moreButton->setText(QStringLiteral("更多"));
+  moreButton->setPopupMode(QToolButton::InstantPopup);
+  moreButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
+  auto *moreMenu = new QMenu(moreButton);
+  auto *openArtifactsAction = moreMenu->addAction(QStringLiteral("打开资料目录"));
+  connect(openArtifactsAction, &QAction::triggered, this, &MainWindow::openArtifactsDirectory);
+  auto *pinAction = moreMenu->addAction(QStringLiteral("切换窗口置顶"));
+  connect(pinAction, &QAction::triggered, this, &MainWindow::togglePinnedState);
+  moreMenu->addSeparator();
+  auto *quitAction = moreMenu->addAction(QStringLiteral("退出助手"));
+  connect(quitAction, &QAction::triggered, this, [this]() {
     m_allowClose = true;
     emit exitRequested();
   });
-  headerActions->addWidget(quitButton);
+  moreButton->setMenu(moreMenu);
+  headerActions->addWidget(moreButton);
   headerActions->addStretch(1);
   headerLayout->addLayout(headerActions);
 
@@ -467,6 +567,19 @@ void MainWindow::buildUi() {
     QPushButton#HeaderActionPrimary:hover {
       background: #1b5c92;
     }
+    QToolButton#HeaderMenuButton {
+      background: #12263a;
+      border: 1px solid #254763;
+      border-radius: 12px;
+      min-height: 42px;
+      min-width: 88px;
+      padding: 0 16px;
+      color: #f5fbff;
+    }
+    QToolButton#HeaderMenuButton:hover {
+      background: #18344f;
+      border-color: #3771a1;
+    }
     QPushButton#QuickActionButton {
       background: #0c1b2a;
       border: 1px solid #22425f;
@@ -515,6 +628,24 @@ void MainWindow::buildUi() {
       color: #dceeff;
       font-size: 14px;
       font-weight: 700;
+    }
+    QLabel#ArtifactPreviewImage {
+      background: #091522;
+      border: 1px solid #17314a;
+      border-radius: 12px;
+      padding: 6px;
+    }
+    QMenu {
+      background: #0d1724;
+      border: 1px solid #17314b;
+      padding: 8px;
+    }
+    QMenu::item {
+      padding: 8px 18px;
+      border-radius: 8px;
+    }
+    QMenu::item:selected {
+      background: #173b59;
     }
   )"));
 }
@@ -940,6 +1071,12 @@ QWidget *MainWindow::buildHistoryPage() {
   previewLayout->addWidget(previewTitle);
   m_artifactMetaLabel = createValueLabel(true);
   previewLayout->addWidget(m_artifactMetaLabel);
+  m_artifactPreviewImageLabel = new QLabel;
+  m_artifactPreviewImageLabel->setObjectName(QStringLiteral("ArtifactPreviewImage"));
+  m_artifactPreviewImageLabel->setAlignment(Qt::AlignCenter);
+  m_artifactPreviewImageLabel->setMinimumHeight(168);
+  m_artifactPreviewImageLabel->hide();
+  previewLayout->addWidget(m_artifactPreviewImageLabel);
   m_artifactPreviewView = new QTextEdit;
   m_artifactPreviewView->setReadOnly(true);
   m_artifactPreviewView->setMinimumWidth(280);
@@ -1568,18 +1705,45 @@ void MainWindow::updateArtifactPreview() {
 
   if (!m_artifactList || !m_artifactList->currentItem()) {
     m_artifactMetaLabel->setText(QStringLiteral("当前没有可预览的资料。"));
+    if (m_artifactPreviewImageLabel) {
+      m_artifactPreviewImageLabel->hide();
+      m_artifactPreviewImageLabel->clear();
+    }
     m_artifactPreviewView->setPlainText(QStringLiteral("刷新后可在这里查看工单、脚本、日志、草稿和截图说明。"));
     return;
   }
 
   const QString path = m_artifactList->currentItem()->data(Qt::UserRole).toString();
   const QFileInfo info(path);
+  const QString category = artifactCategoryLabel(artifactCategoryKey(path));
+  const QString state = artifactStateLabel(path);
+  const QString stateLine =
+      state.isEmpty()
+          ? QStringLiteral("状态：未标记")
+          : QStringLiteral("状态：<span style=\"color:%1; font-weight:600;\">%2</span>")
+                .arg(artifactStateColor(state), state);
   m_artifactMetaLabel->setText(
-      QStringLiteral("类别：%1 | 文件：%2 | 修改：%3")
-          .arg(artifactCategoryLabel(artifactCategoryKey(path)),
-               info.fileName(),
+      QStringLiteral("类别：%1 | %2 | 修改：%3")
+          .arg(category,
+               stateLine,
                info.exists() ? info.lastModified().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"))
                              : QStringLiteral("未知")));
+  if (m_artifactPreviewImageLabel) {
+    if (isImageArtifact(path)) {
+      QPixmap pixmap(path);
+      if (!pixmap.isNull()) {
+        m_artifactPreviewImageLabel->setPixmap(
+            pixmap.scaled(360, 220, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        m_artifactPreviewImageLabel->show();
+      } else {
+        m_artifactPreviewImageLabel->hide();
+        m_artifactPreviewImageLabel->clear();
+      }
+    } else {
+      m_artifactPreviewImageLabel->hide();
+      m_artifactPreviewImageLabel->clear();
+    }
+  }
   m_artifactPreviewView->setPlainText(artifactPreviewText(path));
 }
 

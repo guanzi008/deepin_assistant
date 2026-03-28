@@ -36,6 +36,11 @@ private:
   void updateBubble();
   void positionBubble();
   void updateAnimationState();
+  void scheduleBubbleShow();
+  void scheduleBubbleHide();
+  void showBubbleNow();
+  void hideBubbleNow();
+  void snapToNearestScreenEdge();
   QString hoverTitle() const;
   QString hoverBody() const;
   QString hoverFooter() const;
@@ -49,6 +54,7 @@ private:
   QPoint m_dragOffset;
   QPoint m_pressGlobalPos;
   QTimer m_animTimer;
-  QTimer m_bubbleTimer;
+  QTimer m_bubbleShowTimer;
+  QTimer m_bubbleHideTimer;
   DockBubble *m_bubble = nullptr;
 };

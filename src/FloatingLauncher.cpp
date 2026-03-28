@@ -15,6 +15,13 @@
 #include <QPainterPath>
 #include <QScreen>
 
+namespace {
+constexpr int kBubbleShowDelayMs = 180;
+constexpr int kBubbleHideDelayMs = 220;
+constexpr int kEdgeSnapThreshold = 28;
+constexpr int kEdgeSnapMargin = 8;
+}  // namespace
+
 class DockBubble : public QWidget {
 public:
   explicit DockBubble(QWidget *parent = nullptr) : QWidget(parent) {
@@ -195,9 +202,16 @@ FloatingLauncher::FloatingLauncher(QWidget *parent) : QWidget(parent), m_bubble(
     }
   });
 
-  m_bubbleTimer.setSingleShot(true);
-  connect(&m_bubbleTimer, &QTimer::timeout, this, [this]() {
-    updateBubble();
+  m_bubbleShowTimer.setSingleShot(true);
+  m_bubbleShowTimer.setInterval(kBubbleShowDelayMs);
+  connect(&m_bubbleShowTimer, &QTimer::timeout, this, [this]() {
+    showBubbleNow();
+  });
+
+  m_bubbleHideTimer.setSingleShot(true);
+  m_bubbleHideTimer.setInterval(kBubbleHideDelayMs);
+  connect(&m_bubbleHideTimer, &QTimer::timeout, this, [this]() {
+    hideBubbleNow();
   });
 
   if (m_bubble) {
@@ -308,6 +322,7 @@ void FloatingLauncher::mouseMoveEvent(QMouseEvent *event) {
     if (!m_dragging && travel >= QApplication::startDragDistance()) {
       m_dragging = true;
       updateAnimationState();
+      showBubbleNow();
     }
   }
 
@@ -327,6 +342,7 @@ void FloatingLauncher::mouseReleaseEvent(QMouseEvent *event) {
   if (event->button() == Qt::LeftButton) {
     const int travel = (event->globalPos() - m_pressGlobalPos).manhattanLength();
     const bool shouldActivate = m_trackingPress && travel < QApplication::startDragDistance();
+    const bool wasDragging = m_dragging;
     m_pressed = false;
     m_trackingPress = false;
     m_dragging = false;
@@ -337,8 +353,17 @@ void FloatingLauncher::mouseReleaseEvent(QMouseEvent *event) {
     }
 
     m_clickFlash = 1.0;
+    if (wasDragging) {
+      snapToNearestScreenEdge();
+    }
+
+    if (m_hovered) {
+      scheduleBubbleShow();
+    } else {
+      scheduleBubbleHide();
+    }
+
     updateAnimationState();
-    updateBubble();
     update();
     return;
   }
@@ -350,12 +375,7 @@ void FloatingLauncher::enterEvent(QEvent *event) {
   m_hovered = true;
   update();
   updateAnimationState();
-
-  if (!m_dragging && !m_trackingPress) {
-    m_bubbleTimer.start(140);
-  } else {
-    updateBubble();
-  }
+  scheduleBubbleShow();
 
   QWidget::enterEvent(event);
 }
@@ -364,9 +384,10 @@ void FloatingLauncher::leaveEvent(QEvent *event) {
   m_hovered = false;
   m_pressed = false;
   m_trackingPress = false;
-  m_bubbleTimer.stop();
-  if (m_bubble) {
-    m_bubble->hide();
+  if (m_dragging) {
+    showBubbleNow();
+  } else {
+    scheduleBubbleHide();
   }
   update();
   updateAnimationState();
@@ -374,7 +395,8 @@ void FloatingLauncher::leaveEvent(QEvent *event) {
 }
 
 void FloatingLauncher::contextMenuEvent(QContextMenuEvent *event) {
-  m_bubbleTimer.stop();
+  m_bubbleShowTimer.stop();
+  m_bubbleHideTimer.stop();
   if (m_bubble) {
     m_bubble->hide();
   }
@@ -411,16 +433,16 @@ void FloatingLauncher::updateBubble() {
     return;
   }
 
-  if (!(m_hovered || m_dragging || m_pressed)) {
-    m_bubble->hide();
+  if (m_dragging || m_pressed || m_hovered) {
+    showBubbleNow();
     return;
   }
 
-  m_bubble->setTailOnLeft(true);
-  m_bubble->setContent(hoverTitle(), hoverBody(), hoverFooter());
-  positionBubble();
-  m_bubble->raise();
-  m_bubble->show();
+  if (m_bubbleHideTimer.isActive() || m_bubbleShowTimer.isActive()) {
+    return;
+  }
+
+  hideBubbleNow();
 }
 
 void FloatingLauncher::positionBubble() {
@@ -466,6 +488,102 @@ void FloatingLauncher::updateAnimationState() {
 
   if (!keepRunning && m_animTimer.isActive()) {
     m_animTimer.stop();
+  }
+}
+
+void FloatingLauncher::scheduleBubbleShow() {
+  m_bubbleHideTimer.stop();
+
+  if (!(m_hovered || m_dragging || m_pressed)) {
+    return;
+  }
+
+  if (m_bubble && m_bubble->isVisible()) {
+    showBubbleNow();
+    return;
+  }
+
+  if (!m_bubbleShowTimer.isActive()) {
+    m_bubbleShowTimer.start();
+  }
+  updateAnimationState();
+}
+
+void FloatingLauncher::scheduleBubbleHide() {
+  m_bubbleShowTimer.stop();
+
+  if (!m_bubble || !m_bubble->isVisible()) {
+    hideBubbleNow();
+    return;
+  }
+
+  if (!m_bubbleHideTimer.isActive()) {
+    m_bubbleHideTimer.start();
+  }
+  updateAnimationState();
+}
+
+void FloatingLauncher::showBubbleNow() {
+  m_bubbleHideTimer.stop();
+
+  if (!m_bubble || !(m_hovered || m_dragging || m_pressed)) {
+    return;
+  }
+
+  m_bubbleShowTimer.stop();
+  m_bubble->setTailOnLeft(true);
+  m_bubble->setContent(hoverTitle(), hoverBody(), hoverFooter());
+  positionBubble();
+  m_bubble->raise();
+  m_bubble->show();
+}
+
+void FloatingLauncher::hideBubbleNow() {
+  m_bubbleShowTimer.stop();
+  m_bubbleHideTimer.stop();
+
+  if (!m_bubble) {
+    return;
+  }
+
+  m_bubble->hide();
+}
+
+void FloatingLauncher::snapToNearestScreenEdge() {
+  QScreen *screen = QGuiApplication::screenAt(mapToGlobal(rect().center()));
+  if (!screen) {
+    screen = QGuiApplication::primaryScreen();
+  }
+
+  if (!screen) {
+    return;
+  }
+
+  const QRect avail = screen->availableGeometry();
+  const QRect geom = geometry();
+  QPoint target = geom.topLeft();
+
+  const int leftDistance = std::abs(geom.left() - avail.left());
+  const int rightDistance = std::abs(avail.right() - geom.right());
+  const int topDistance = std::abs(geom.top() - avail.top());
+  const int bottomDistance = std::abs(avail.bottom() - geom.bottom());
+
+  if (std::min(leftDistance, rightDistance) <= kEdgeSnapThreshold) {
+    target.setX(leftDistance <= rightDistance
+                    ? avail.left() + kEdgeSnapMargin
+                    : avail.right() - geom.width() - kEdgeSnapMargin);
+  }
+
+  if (std::min(topDistance, bottomDistance) <= kEdgeSnapThreshold) {
+    target.setY(topDistance <= bottomDistance
+                    ? avail.top() + kEdgeSnapMargin
+                    : avail.bottom() - geom.height() - kEdgeSnapMargin);
+  }
+
+  if (target != geom.topLeft()) {
+    move(target);
+    positionBubble();
+    update();
   }
 }
 

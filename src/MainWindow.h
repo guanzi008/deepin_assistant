@@ -17,6 +17,7 @@ class QTextEdit;
 class QPlainTextEdit;
 class QPushButton;
 class QStackedWidget;
+class QToolButton;
 
 class MainWindow : public QMainWindow {
   Q_OBJECT
@@ -117,6 +118,7 @@ private:
   QLabel *m_riskLabel = nullptr;
   QLabel *m_artifactSummaryLabel = nullptr;
   QLabel *m_artifactMetaLabel = nullptr;
+  QLabel *m_artifactPreviewImageLabel = nullptr;
   QTextEdit *m_findingsEdit = nullptr;
   QTextEdit *m_actionPreviewView = nullptr;
   QTextEdit *m_artifactPreviewView = nullptr;
