@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <radialGradient id="planet" cx="35%" cy="30%" r="70%">
+      <stop offset="0%" stop-color="#74f5ff"/>
+      <stop offset="45%" stop-color="#1276ff"/>
+      <stop offset="100%" stop-color="#041b38"/>
+    </radialGradient>
+    <linearGradient id="ring" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8fffe6"/>
+      <stop offset="100%" stop-color="#57c8ff"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="56" fill="#06111d"/>
+  <circle cx="128" cy="128" r="74" fill="url(#planet)"/>
+  <ellipse cx="128" cy="132" rx="108" ry="34" fill="none" stroke="url(#ring)" stroke-width="12"/>
+  <ellipse cx="104" cy="116" rx="18" ry="11" fill="#8dffb8" fill-opacity="0.65"/>
+  <ellipse cx="137" cy="150" rx="13" ry="9" fill="#8dffb8" fill-opacity="0.55"/>
+  <path d="M190 76c20 18 30 39 30 63 0 22-9 42-28 59" fill="none" stroke="#dff8ff" stroke-opacity="0.85" stroke-width="6" stroke-linecap="round"/>
+</svg>

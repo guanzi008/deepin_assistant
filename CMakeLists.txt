@@ -27,6 +27,7 @@ add_executable(orbit_deepin_assistant
     src/ActionExecutor.h
     src/CommandRunner.cpp
     src/CommandRunner.h
+    resources/app.qrc
 )
 
 target_compile_definitions(orbit_deepin_assistant PRIVATE ORBIT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
@@ -44,6 +45,10 @@ endif()
 
 install(TARGETS orbit_deepin_assistant RUNTIME DESTINATION bin)
 install(FILES README.md DESTINATION share/orbit-deepin-assistant OPTIONAL)
+install(FILES packaging/orbit-deepin-assistant.desktop
+        DESTINATION share/applications)
+install(FILES assets/orbit-deepin-assistant.svg
+        DESTINATION share/icons/hicolor/scalable/apps)
 
 set(CPACK_PACKAGE_NAME "orbit-deepin-assistant")
 set(CPACK_PACKAGE_VENDOR "guanzi008")

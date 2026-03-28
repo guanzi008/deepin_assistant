@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Orbit Deepin Assistant
+Name[zh_CN]=Orbit Deepin Assistant
+Comment=Desktop assistant for deepin and UOS
+Comment[zh_CN]=用于 deepin 和 UOS 的本地桌面助手
+Exec=orbit_deepin_assistant
+Icon=orbit-deepin-assistant
+Terminal=false
+Categories=Utility;System;
+StartupNotify=true
+Keywords=deepin;uos;assistant;printer;diagnostics;

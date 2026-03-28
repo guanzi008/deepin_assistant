@@ -1,0 +1,5 @@
+<RCC>
+  <qresource prefix="/icons">
+    <file alias="orbit-deepin-assistant.svg">../assets/orbit-deepin-assistant.svg</file>
+  </qresource>
+</RCC>

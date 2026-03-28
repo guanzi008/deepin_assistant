@@ -36,6 +36,9 @@ private slots:
   void handlePageChanged(int index);
   void refreshMailContext();
   void generateMailDraft();
+  void exportMailDraft();
+  void exportMailContext();
+  void captureMailScreenshot();
   void previewAction(const QString &actionId);
   void openArtifactsDirectory();
   void togglePinnedState();
@@ -53,10 +56,16 @@ private:
   void updateAnalysisView();
   void updateMailContextView();
   void updateMailDraftView();
+  void updateMailExportHint();
   void appendLog(const QString &title, const QString &body);
   void reloadArtifactList();
   void positionOnPrimaryScreen();
   QString currentScenario() const;
+  QString timestamp() const;
+  QString ensureArtifactSubdir(const QString &name) const;
+  QString writeArtifactText(const QString &subdir,
+                            const QString &fileName,
+                            const QString &content) const;
 
   DiagnosticsService m_diagnostics;
   ActionExecutor m_actionExecutor;
@@ -66,6 +75,9 @@ private:
   AnalysisResult m_analysis;
   DesktopContext m_desktopContext;
   EmailDraft m_emailDraft;
+  QStringList m_mailAttachmentPaths;
+  QString m_lastMailDraftPath;
+  QString m_lastMailContextPath;
   bool m_pinned = true;
   bool m_allowClose = false;
 
@@ -84,6 +96,7 @@ private:
   QLabel *m_mailIntentHintLabel = nullptr;
   QLabel *m_mailRecipientsHintLabel = nullptr;
   QLabel *m_mailDraftHintLabel = nullptr;
+  QLabel *m_mailExportLabel = nullptr;
   QLabel *m_planTitleLabel = nullptr;
   QLabel *m_planSummaryLabel = nullptr;
   QLabel *m_riskLabel = nullptr;

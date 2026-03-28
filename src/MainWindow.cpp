@@ -7,9 +7,13 @@
 #include <QDateTime>
 #include <QDesktopServices>
 #include <QDir>
+#include <QFile>
 #include <QFrame>
 #include <QGuiApplication>
 #include <QHBoxLayout>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QListWidget>
 #include <QListWidgetItem>
@@ -17,11 +21,13 @@
 #include <QMap>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QPixmap>
 #include <QScreen>
 #include <QStackedWidget>
 #include <QTextEdit>
 #include <QUrl>
 #include <QVBoxLayout>
+#include <QWindow>
 
 namespace {
 
@@ -347,6 +353,18 @@ QWidget *MainWindow::buildMailPage() {
   connect(generateMailButton, &QPushButton::clicked, this, &MainWindow::generateMailDraft);
   toolbar->addWidget(generateMailButton);
 
+  auto *exportContextButton = new QPushButton(QStringLiteral("导出上下文"));
+  connect(exportContextButton, &QPushButton::clicked, this, &MainWindow::exportMailContext);
+  toolbar->addWidget(exportContextButton);
+
+  auto *captureButton = new QPushButton(QStringLiteral("截取当前屏幕"));
+  connect(captureButton, &QPushButton::clicked, this, &MainWindow::captureMailScreenshot);
+  toolbar->addWidget(captureButton);
+
+  auto *exportDraftButton = new QPushButton(QStringLiteral("导出草稿"));
+  connect(exportDraftButton, &QPushButton::clicked, this, &MainWindow::exportMailDraft);
+  toolbar->addWidget(exportDraftButton);
+
   auto *copySubjectButton = new QPushButton(QStringLiteral("复制主题"));
   connect(copySubjectButton, &QPushButton::clicked, this, [this]() {
     if (m_mailSubjectEdit) {
@@ -413,6 +431,9 @@ QWidget *MainWindow::buildMailPage() {
 
   m_mailDraftHintLabel = createValueLabel(true);
   draftLayout->addWidget(m_mailDraftHintLabel);
+
+  m_mailExportLabel = createValueLabel(true);
+  draftLayout->addWidget(m_mailExportLabel);
 
   m_mailPreviewEdit = new QTextEdit;
   m_mailPreviewEdit->setReadOnly(true);
@@ -530,6 +551,30 @@ QPushButton *MainWindow::createActionButton(const QString &label,
   auto *button = new QPushButton(label);
   connect(button, &QPushButton::clicked, this, [this, actionId]() { runAction(actionId); });
   return button;
+}
+
+QString MainWindow::timestamp() const {
+  return QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss"));
+}
+
+QString MainWindow::ensureArtifactSubdir(const QString &name) const {
+  QDir root(m_actionExecutor.artifactsDir());
+  root.mkpath(name);
+  return root.filePath(name);
+}
+
+QString MainWindow::writeArtifactText(const QString &subdir,
+                                      const QString &fileName,
+                                      const QString &content) const {
+  const QString targetPath = QDir(ensureArtifactSubdir(subdir)).filePath(fileName);
+  QFile file(targetPath);
+  if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+    return QString();
+  }
+
+  file.write(content.toUtf8());
+  file.close();
+  return targetPath;
 }
 
 void MainWindow::handlePageChanged(int index) {
@@ -752,21 +797,34 @@ void MainWindow::updateMailContextView() {
   QStringList lines;
   lines << QStringLiteral("采集时间：%1").arg(m_desktopContext.collectedAt)
         << QStringLiteral("会话类型：%1").arg(m_desktopContext.sessionType)
+        << QStringLiteral("用户：%1@%2")
+               .arg(m_desktopContext.userName, m_desktopContext.hostName)
         << QStringLiteral("活动窗口：%1").arg(m_desktopContext.activeWindowTitle)
         << QStringLiteral("窗口类别：%1").arg(m_desktopContext.activeWindowClass)
         << QStringLiteral("剪贴板：%1")
                .arg(multilinePreview(m_desktopContext.clipboardText, 240));
+  if (!m_desktopContext.notes.isEmpty()) {
+    lines << QStringLiteral("提示：");
+    for (const auto &note : m_desktopContext.notes) {
+      lines << QStringLiteral("- %1").arg(note);
+    }
+  }
   m_mailContextEdit->setPlainText(lines.join(QStringLiteral("\n")));
 }
 
 void MainWindow::updateMailDraftView() {
   if (!m_mailRecipientsEdit || !m_mailSubjectEdit || !m_mailBodyEdit ||
-      !m_mailPreviewEdit || !m_mailDraftHintLabel) {
+      !m_mailPreviewEdit || !m_mailDraftHintLabel || !m_mailExportLabel) {
     return;
   }
 
+  QStringList attachmentLines;
+  for (const auto &path : m_mailAttachmentPaths) {
+    attachmentLines << QStringLiteral("- %1").arg(path);
+  }
+
   const QString preview =
-      QStringLiteral("收件人：%1\n抄送：%2\n主题：%3\n\n%4")
+      QStringLiteral("收件人：%1\n抄送：%2\n主题：%3\n\n%4%5")
           .arg(m_mailRecipientsEdit->text().trimmed().isEmpty()
                    ? m_emailDraft.recipients
                    : m_mailRecipientsEdit->text().trimmed(),
@@ -777,7 +835,11 @@ void MainWindow::updateMailDraftView() {
                    : m_mailSubjectEdit->text().trimmed(),
                m_mailBodyEdit->toPlainText().trimmed().isEmpty()
                    ? m_emailDraft.body
-                   : m_mailBodyEdit->toPlainText().trimmed());
+                   : m_mailBodyEdit->toPlainText().trimmed(),
+               attachmentLines.isEmpty()
+                   ? QString()
+                   : QStringLiteral("\n\n附件建议：\n%1")
+                         .arg(attachmentLines.join(QStringLiteral("\n"))));
   m_mailPreviewEdit->setPlainText(preview);
 
   QStringList hints;
@@ -787,6 +849,125 @@ void MainWindow::updateMailDraftView() {
                  .arg(m_emailDraft.extractedTopics.join(QStringLiteral(" / ")));
   }
   m_mailDraftHintLabel->setText(hints.join(QStringLiteral("\n")));
+  updateMailExportHint();
+}
+
+void MainWindow::updateMailExportHint() {
+  if (!m_mailExportLabel) {
+    return;
+  }
+
+  QStringList lines;
+  if (!m_lastMailContextPath.isEmpty()) {
+    lines << QStringLiteral("上下文：%1").arg(m_lastMailContextPath);
+  }
+  if (!m_lastMailDraftPath.isEmpty()) {
+    lines << QStringLiteral("草稿：%1").arg(m_lastMailDraftPath);
+  }
+  if (!m_mailAttachmentPaths.isEmpty()) {
+    lines << QStringLiteral("截图：");
+    for (const auto &path : m_mailAttachmentPaths) {
+      lines << QStringLiteral("- %1").arg(path);
+    }
+  }
+
+  m_mailExportLabel->setText(lines.isEmpty()
+                                 ? QStringLiteral("导出后会在资料目录里留下草稿、上下文和截图。")
+                                 : lines.join(QStringLiteral("\n")));
+}
+
+void MainWindow::exportMailContext() {
+  QJsonObject root;
+  root.insert(QStringLiteral("collectedAt"), m_desktopContext.collectedAt);
+  root.insert(QStringLiteral("userName"), m_desktopContext.userName);
+  root.insert(QStringLiteral("hostName"), m_desktopContext.hostName);
+  root.insert(QStringLiteral("sessionType"), m_desktopContext.sessionType);
+  root.insert(QStringLiteral("activeWindowTitle"), m_desktopContext.activeWindowTitle);
+  root.insert(QStringLiteral("activeWindowClass"), m_desktopContext.activeWindowClass);
+  root.insert(QStringLiteral("clipboardText"), m_desktopContext.clipboardText);
+  root.insert(QStringLiteral("notes"), QJsonArray::fromStringList(m_desktopContext.notes));
+  root.insert(QStringLiteral("distroName"), m_snapshot.distroName);
+  root.insert(QStringLiteral("analysisTitle"), m_analysis.title);
+  root.insert(QStringLiteral("analysisSummary"), m_analysis.summary);
+
+  const QString fileName = QStringLiteral("mail-context-%1.json").arg(timestamp());
+  const QString path =
+      writeArtifactText(QStringLiteral("mail-contexts"),
+                        fileName,
+                        QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented)));
+  if (!path.isEmpty()) {
+    m_lastMailContextPath = path;
+    reloadArtifactList();
+    updateMailExportHint();
+    appendLog(QStringLiteral("导出邮件上下文"),
+              QStringLiteral("已导出到\n%1").arg(path));
+  }
+}
+
+void MainWindow::exportMailDraft() {
+  const QString recipients =
+      m_mailRecipientsEdit ? m_mailRecipientsEdit->text().trimmed() : m_emailDraft.recipients;
+  const QString subject =
+      m_mailSubjectEdit ? m_mailSubjectEdit->text().trimmed() : m_emailDraft.subject;
+  const QString body =
+      m_mailBodyEdit ? m_mailBodyEdit->toPlainText().trimmed() : m_emailDraft.body;
+
+  QStringList lines;
+  lines << QStringLiteral("# 邮件草稿")
+        << QString()
+        << QStringLiteral("- 收件人：%1").arg(recipients.isEmpty() ? QStringLiteral("待确认") : recipients)
+        << QStringLiteral("- 主题：%1").arg(subject.isEmpty() ? QStringLiteral("待确认") : subject)
+        << QStringLiteral("- 生成时间：%1").arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")))
+        << QString();
+  if (!m_mailAttachmentPaths.isEmpty()) {
+    lines << QStringLiteral("## 附件建议");
+    for (const auto &path : m_mailAttachmentPaths) {
+      lines << QStringLiteral("- %1").arg(path);
+    }
+    lines << QString();
+  }
+  lines << QStringLiteral("## 正文")
+        << body
+        << QString()
+        << QStringLiteral("## 说明")
+        << m_emailDraft.rationale;
+
+  const QString fileName = QStringLiteral("mail-draft-%1.md").arg(timestamp());
+  const QString path =
+      writeArtifactText(QStringLiteral("mail-drafts"), fileName, lines.join(QStringLiteral("\n")));
+  if (!path.isEmpty()) {
+    m_lastMailDraftPath = path;
+    reloadArtifactList();
+    updateMailExportHint();
+    appendLog(QStringLiteral("导出邮件草稿"),
+              QStringLiteral("已导出到\n%1").arg(path));
+  }
+}
+
+void MainWindow::captureMailScreenshot() {
+  QScreen *screen = windowHandle() && windowHandle()->screen()
+                        ? windowHandle()->screen()
+                        : QGuiApplication::primaryScreen();
+  if (!screen) {
+    appendLog(QStringLiteral("截取当前屏幕"), QStringLiteral("当前没有可用屏幕。"));
+    return;
+  }
+
+  const QString path = QDir(ensureArtifactSubdir(QStringLiteral("screenshots")))
+                           .filePath(QStringLiteral("mail-shot-%1.png").arg(timestamp()));
+  const QPixmap shot = screen->grabWindow(0);
+  if (shot.isNull() || !shot.save(path, "PNG")) {
+    appendLog(QStringLiteral("截取当前屏幕"), QStringLiteral("截图保存失败。"));
+    return;
+  }
+
+  if (!m_mailAttachmentPaths.contains(path)) {
+    m_mailAttachmentPaths.prepend(path);
+  }
+  reloadArtifactList();
+  updateMailDraftView();
+  appendLog(QStringLiteral("截取当前屏幕"),
+            QStringLiteral("已保存截图\n%1").arg(path));
 }
 
 void MainWindow::runAction(const QString &actionId) {
@@ -798,8 +979,15 @@ void MainWindow::runAction(const QString &actionId) {
                                             m_analysis);
 
   QStringList bodyLines;
-  bodyLines << QStringLiteral("场景：%1").arg(outcome.scenarioLabel)
-            << outcome.summary;
+  bodyLines << QStringLiteral("场景：%1").arg(outcome.scenarioLabel);
+  if (outcome.pendingManualAuth) {
+    bodyLines << QStringLiteral("状态：待授权执行");
+  } else {
+    bodyLines << QStringLiteral("状态：%1")
+                     .arg(outcome.success ? QStringLiteral("已执行")
+                                          : QStringLiteral("执行失败"));
+  }
+  bodyLines << outcome.summary;
   if (!outcome.previewText.isEmpty()) {
     bodyLines << QString() << QStringLiteral("执行前说明：") << outcome.previewText;
   }
@@ -824,13 +1012,19 @@ void MainWindow::runAction(const QString &actionId) {
       bodyLines << QStringLiteral("- %1：%2").arg(artifact.label, artifact.path);
     }
   }
+  if (!outcome.runLogPath.isEmpty()) {
+    bodyLines << QString() << QStringLiteral("运行日志：")
+              << outcome.runLogPath;
+  }
   if (!outcome.details.isEmpty()) {
     bodyLines << QString() << outcome.details;
   }
 
   appendLog(outcome.label, bodyLines.join(QStringLiteral("\n")));
   reloadArtifactList();
-  refreshSnapshot();
+  if (!outcome.pendingManualAuth) {
+    refreshSnapshot();
+  }
 }
 
 void MainWindow::appendLog(const QString &title, const QString &body) {

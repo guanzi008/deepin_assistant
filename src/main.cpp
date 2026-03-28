@@ -2,8 +2,10 @@
 #include "MainWindow.h"
 
 #include <QApplication>
+#include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
+#include <QIcon>
 #include <QStandardPaths>
 
 namespace {
@@ -15,7 +17,20 @@ QString sourceRoot() {
 
 QString artifactsDir() {
   const QString root = sourceRoot();
-  QDir dir(root);
+  const QString binaryPath = QCoreApplication::applicationFilePath();
+  if (!binaryPath.isEmpty() && QFileInfo(binaryPath).absolutePath().startsWith(root)) {
+    QDir dir(root);
+    dir.mkpath(QStringLiteral("artifacts"));
+    return dir.filePath(QStringLiteral("artifacts"));
+  }
+
+  QString appDataRoot =
+      QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+  if (appDataRoot.isEmpty()) {
+    appDataRoot = QDir::homePath() + QStringLiteral("/.local/share/orbit-deepin-assistant");
+  }
+
+  QDir dir(appDataRoot);
   dir.mkpath(QStringLiteral("artifacts"));
   return dir.filePath(QStringLiteral("artifacts"));
 }
@@ -26,7 +41,9 @@ int main(int argc, char *argv[]) {
   QApplication app(argc, argv);
   QApplication::setApplicationName(QStringLiteral("Orbit Deepin Assistant"));
   QApplication::setOrganizationName(QStringLiteral("guanzi008"));
+  QApplication::setDesktopFileName(QStringLiteral("orbit-deepin-assistant"));
   QApplication::setStyle(QStringLiteral("Fusion"));
+  QApplication::setWindowIcon(QIcon(QStringLiteral(":/icons/orbit-deepin-assistant.svg")));
 
   MainWindow window(artifactsDir());
   FloatingLauncher launcher;
@@ -39,7 +56,6 @@ int main(int argc, char *argv[]) {
 
   launcher.anchorToPrimaryScreen();
   launcher.show();
-  window.show();
 
   return app.exec();
 }

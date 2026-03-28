@@ -12,6 +12,7 @@ struct ActionOutcome {
   QString scenarioLabel;
   bool success = false;
   bool requiresManualAuth = false;
+  bool pendingManualAuth = false;
   QString summary;
   QString previewText;
   QStringList previewCommands;
@@ -21,6 +22,7 @@ struct ActionOutcome {
   QList<ActionArtifactPath> outputPaths;
   QString artifactPath;
   QString commandHint;
+  QString runLogPath;
 };
 
 class ActionExecutor {
@@ -45,6 +47,8 @@ private:
   QString writeJsonFile(const QString &subdir,
                         const QString &fileName,
                         const QByteArray &content) const;
+  QString writeActionRunRecord(const ActionOutcome &outcome) const;
+  ActionOutcome recordActionRun(ActionOutcome outcome) const;
   QStringList extractQueueNames(const QString &queueText) const;
   ActionOutcome createSupportBundle(const QString &scenario,
                                     const QString &note,

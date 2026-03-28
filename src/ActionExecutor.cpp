@@ -49,6 +49,25 @@ void addOutputPath(ActionOutcome &outcome,
   }
 }
 
+QJsonArray toJsonArray(const QStringList &values) {
+  QJsonArray array;
+  for (const auto &value : values) {
+    array.append(value);
+  }
+  return array;
+}
+
+QJsonArray toJsonArray(const QList<ActionArtifactPath> &paths) {
+  QJsonArray array;
+  for (const auto &item : paths) {
+    QJsonObject object;
+    object.insert(QStringLiteral("label"), item.label);
+    object.insert(QStringLiteral("path"), item.path);
+    array.append(object);
+  }
+  return array;
+}
+
 ActionOutcome finalizeOutcome(ActionOutcome outcome,
                               const QString &scenario,
                               const AnalysisResult &analysis) {
@@ -102,6 +121,46 @@ QString ActionExecutor::writeJsonFile(const QString &subdir,
   file.write(content);
   file.close();
   return targetPath;
+}
+
+QString ActionExecutor::writeActionRunRecord(const ActionOutcome &outcome) const {
+  const QString fileName = QStringLiteral("action-run-%1.json")
+                               .arg(QDateTime::currentDateTimeUtc()
+                                        .toString(QStringLiteral("yyyyMMdd-HHmmss-zzz")));
+
+  QJsonObject root;
+  root.insert(QStringLiteral("timestamp"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+  root.insert(QStringLiteral("scenario"), outcome.scenario);
+  root.insert(QStringLiteral("scenarioLabel"), outcome.scenarioLabel);
+  root.insert(QStringLiteral("actionId"), outcome.actionId);
+  root.insert(QStringLiteral("actionLabel"), outcome.label);
+  root.insert(QStringLiteral("success"), outcome.success);
+  root.insert(QStringLiteral("requiresManualAuth"), outcome.requiresManualAuth);
+  root.insert(QStringLiteral("pendingManualAuth"), outcome.pendingManualAuth);
+  root.insert(QStringLiteral("summary"), outcome.summary);
+  root.insert(QStringLiteral("previewText"), outcome.previewText);
+  root.insert(QStringLiteral("previewCommands"), toJsonArray(outcome.previewCommands));
+  root.insert(QStringLiteral("manualAuthCommands"),
+              toJsonArray(outcome.manualAuthCommands));
+  root.insert(QStringLiteral("supportedActionIds"),
+              toJsonArray(outcome.supportedActionIds));
+  root.insert(QStringLiteral("outputPaths"), toJsonArray(outcome.outputPaths));
+  root.insert(QStringLiteral("details"), outcome.details);
+  root.insert(QStringLiteral("artifactPath"), outcome.artifactPath);
+  root.insert(QStringLiteral("commandHint"), outcome.commandHint);
+
+  const QString path =
+      writeJsonFile(QStringLiteral("action-runs"), fileName,
+                    QJsonDocument(root).toJson(QJsonDocument::Indented));
+  return path;
+}
+
+ActionOutcome ActionExecutor::recordActionRun(ActionOutcome outcome) const {
+  const QString path = writeActionRunRecord(outcome);
+  if (!path.isEmpty()) {
+    outcome.runLogPath = path;
+  }
+  return outcome;
 }
 
 QStringList ActionExecutor::extractQueueNames(const QString &queueText) const {
@@ -331,8 +390,9 @@ ActionOutcome ActionExecutor::createPrivilegedScript(const QString &actionId,
                             QFileDevice::ExeOther);
 
   ActionOutcome outcome = makeOutcome(actionId, label);
-  outcome.success = true;
+  outcome.success = false;
   outcome.requiresManualAuth = true;
+  outcome.pendingManualAuth = true;
   outcome.summary = summary;
   outcome.details = QStringLiteral("已生成待执行脚本，请确认后再授权运行。");
   outcome.commandHint = QStringLiteral("pkexec sh \"%1\"").arg(path);
@@ -376,15 +436,17 @@ ActionOutcome ActionExecutor::run(const QString &actionId,
                                   const DiagnosticSnapshot &snapshot,
                                   const AnalysisResult &analysis) const {
   if (actionId == QStringLiteral("collect-support-bundle")) {
-    return finalizeOutcome(createSupportBundle(scenario, note, snapshot, analysis),
-                           scenario,
-                           analysis);
+    return recordActionRun(
+        finalizeOutcome(createSupportBundle(scenario, note, snapshot, analysis),
+                        scenario,
+                        analysis));
   }
 
   if (actionId == QStringLiteral("export-workorder")) {
-    return finalizeOutcome(exportWorkorder(scenario, note, snapshot, analysis),
-                           scenario,
-                           analysis);
+    return recordActionRun(
+        finalizeOutcome(exportWorkorder(scenario, note, snapshot, analysis),
+                        scenario,
+                        analysis));
   }
 
   if (actionId == QStringLiteral("export-network-check")) {
@@ -398,7 +460,7 @@ ActionOutcome ActionExecutor::run(const QString &actionId,
     outcome.previewCommands = analysis.previewCommands;
     outcome.manualAuthCommands = analysis.manualAuthCommands;
     outcome.supportedActionIds = analysis.supportedActionIds;
-    return outcome;
+    return recordActionRun(outcome);
   }
 
   if (actionId == QStringLiteral("export-audio-check")) {
@@ -412,7 +474,7 @@ ActionOutcome ActionExecutor::run(const QString &actionId,
     outcome.previewCommands = analysis.previewCommands;
     outcome.manualAuthCommands = analysis.manualAuthCommands;
     outcome.supportedActionIds = analysis.supportedActionIds;
-    return outcome;
+    return recordActionRun(outcome);
   }
 
   if (actionId == QStringLiteral("export-install-check")) {
@@ -426,7 +488,7 @@ ActionOutcome ActionExecutor::run(const QString &actionId,
     outcome.previewCommands = analysis.previewCommands;
     outcome.manualAuthCommands = analysis.manualAuthCommands;
     outcome.supportedActionIds = analysis.supportedActionIds;
-    return outcome;
+    return recordActionRun(outcome);
   }
 
   if (actionId == QStringLiteral("clear-print-queue")) {
@@ -439,7 +501,7 @@ ActionOutcome ActionExecutor::run(const QString &actionId,
     outcome.previewText = QStringLiteral("清理当前用户可执行的打印作业。");
     outcome.previewCommands << QStringLiteral("cancel -a");
     outcome.supportedActionIds = analysis.supportedActionIds;
-    return outcome;
+    return recordActionRun(outcome);
   }
 
   if (actionId == QStringLiteral("restart-audio-session")) {
@@ -455,7 +517,7 @@ ActionOutcome ActionExecutor::run(const QString &actionId,
     outcome.previewCommands << QStringLiteral(
         "systemctl --user restart wireplumber pipewire pipewire-pulse");
     outcome.supportedActionIds = analysis.supportedActionIds;
-    return outcome;
+    return recordActionRun(outcome);
   }
 
   if (actionId == QStringLiteral("restart-cups")) {
@@ -468,7 +530,7 @@ ActionOutcome ActionExecutor::run(const QString &actionId,
     outcome.scenario = scenario;
     outcome.scenarioLabel = scenarioLabel(scenario);
     outcome.supportedActionIds = analysis.supportedActionIds;
-    return outcome;
+    return recordActionRun(outcome);
   }
 
   if (actionId == QStringLiteral("restart-network-manager")) {
@@ -481,7 +543,7 @@ ActionOutcome ActionExecutor::run(const QString &actionId,
     outcome.scenario = scenario;
     outcome.scenarioLabel = scenarioLabel(scenario);
     outcome.supportedActionIds = analysis.supportedActionIds;
-    return outcome;
+    return recordActionRun(outcome);
   }
 
   if (actionId == QStringLiteral("repair-package-state")) {
@@ -494,7 +556,7 @@ ActionOutcome ActionExecutor::run(const QString &actionId,
     outcome.scenario = scenario;
     outcome.scenarioLabel = scenarioLabel(scenario);
     outcome.supportedActionIds = analysis.supportedActionIds;
-    return outcome;
+    return recordActionRun(outcome);
   }
 
   if (actionId == QStringLiteral("reinstall-print-stack")) {
@@ -508,7 +570,7 @@ ActionOutcome ActionExecutor::run(const QString &actionId,
     outcome.scenario = scenario;
     outcome.scenarioLabel = scenarioLabel(scenario);
     outcome.supportedActionIds = analysis.supportedActionIds;
-    return outcome;
+    return recordActionRun(outcome);
   }
 
   if (actionId == QStringLiteral("repair-cups-permissions")) {
@@ -524,7 +586,7 @@ ActionOutcome ActionExecutor::run(const QString &actionId,
     outcome.scenario = scenario;
     outcome.scenarioLabel = scenarioLabel(scenario);
     outcome.supportedActionIds = analysis.supportedActionIds;
-    return outcome;
+    return recordActionRun(outcome);
   }
 
   if (actionId == QStringLiteral("delete-old-queues")) {
@@ -537,7 +599,7 @@ ActionOutcome ActionExecutor::run(const QString &actionId,
       outcome.scenarioLabel = scenarioLabel(scenario);
       outcome.previewText = QStringLiteral("在没有旧队列时，这一步会直接跳过。");
       outcome.supportedActionIds = analysis.supportedActionIds;
-      return outcome;
+      return recordActionRun(outcome);
     }
 
     QStringList commands;
@@ -552,7 +614,7 @@ ActionOutcome ActionExecutor::run(const QString &actionId,
     outcome.scenario = scenario;
     outcome.scenarioLabel = scenarioLabel(scenario);
     outcome.supportedActionIds = analysis.supportedActionIds;
-    return outcome;
+    return recordActionRun(outcome);
   }
 
   ActionOutcome outcome = makeOutcome(actionId, actionId);
@@ -561,7 +623,7 @@ ActionOutcome ActionExecutor::run(const QString &actionId,
   outcome.scenario = scenario;
   outcome.scenarioLabel = scenarioLabel(scenario);
   outcome.supportedActionIds = analysis.supportedActionIds;
-  return outcome;
+  return recordActionRun(outcome);
 }
 
 QStringList ActionExecutor::listArtifacts() const {
@@ -570,7 +632,11 @@ QStringList ActionExecutor::listArtifacts() const {
   const QStringList subdirs = {QStringLiteral("support-bundles"),
                                QStringLiteral("workorders"),
                                QStringLiteral("reports"),
-                               QStringLiteral("pending-actions")};
+                               QStringLiteral("pending-actions"),
+                               QStringLiteral("action-runs"),
+                               QStringLiteral("mail-contexts"),
+                               QStringLiteral("mail-drafts"),
+                               QStringLiteral("screenshots")};
   for (const auto &subdir : subdirs) {
     QDir dir(root.filePath(subdir));
     if (!dir.exists()) {
