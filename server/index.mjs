@@ -133,6 +133,10 @@ const COMMANDS = {
   osRelease: "cat /etc/os-release",
   kernel: "uname -srmo",
   network: "ip -brief address",
+  networkRoute: "ip route",
+  networkManager: "nmcli dev status",
+  networkDns: "resolvectl status",
+  networkLogs: "journalctl -u NetworkManager --since '15 min ago' --no-pager -n 80",
   memory: "free -h",
   storage: "df -h /",
   cupsActive: "systemctl is-active cups",
@@ -141,8 +145,39 @@ const COMMANDS = {
   lpstat: "lpstat -t",
   lpinfo: "lpinfo -v",
   lsusb: "lsusb",
-  cupLogs: "journalctl -u cups --since '15 min ago' --no-pager -n 80"
+  cupLogs: "journalctl -u cups --since '15 min ago' --no-pager -n 80",
+  audioStatus: "systemctl --user is-active pipewire pipewire-pulse wireplumber",
+  audioServices:
+    "systemctl --user status pipewire pipewire-pulse wireplumber --no-pager",
+  audioInfo: "pactl info",
+  audioSinks: "pactl list short sinks",
+  audioSources: "pactl list short sources",
+  audioLogs:
+    "journalctl --user -u pipewire -u pipewire-pulse -u wireplumber --since '15 min ago' --no-pager -n 80",
+  aptPolicy: "apt-cache policy",
+  dpkgAudit: "dpkg --audit",
+  aptHolds: "apt-mark showhold",
+  aptSources: "grep -R '^deb ' /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null",
+  aptLogs: "journalctl -u apt-daily --since '1 day ago' --no-pager -n 60"
 };
+const NETWORK_CHECK_COMMANDS = [
+  "nmcli dev status",
+  "ip -brief address",
+  "resolvectl status",
+  "journalctl -u NetworkManager --since '10 min ago' --no-pager -n 60"
+];
+const AUDIO_CHECK_COMMANDS = [
+  "systemctl --user status pipewire pipewire-pulse wireplumber --no-pager",
+  "pactl info",
+  "pactl list short sinks",
+  "journalctl --user -u pipewire --since '10 min ago' --no-pager -n 60"
+];
+const INSTALL_CHECK_COMMANDS = [
+  "apt-cache policy",
+  "dpkg --audit",
+  "grep -R '^deb ' /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null",
+  "df -h /"
+];
 
 const ACTIONS = {
   "collect-support-bundle": {
@@ -175,6 +210,65 @@ const ACTIONS = {
       COMMANDS.failedUnits,
       COMMANDS.lpstat,
       COMMANDS.cupLogs
+    ]
+  },
+  "export-network-check-report": {
+    id: "export-network-check-report",
+    title: "导出网络检查结果",
+    description: "导出当前网卡、路由、DNS 和 NetworkManager 日志的检查结果。",
+    module: "support",
+    risk: "safe",
+    requiresRoot: false,
+    previewCommands: [
+      COMMANDS.network,
+      COMMANDS.networkManager,
+      COMMANDS.networkRoute,
+      COMMANDS.networkDns,
+      COMMANDS.networkLogs
+    ]
+  },
+  "export-audio-check-report": {
+    id: "export-audio-check-report",
+    title: "导出音频检查结果",
+    description: "导出用户会话音频服务、默认输出和 PipeWire / WirePlumber 状态。",
+    module: "support",
+    risk: "safe",
+    requiresRoot: false,
+    previewCommands: [
+      COMMANDS.audioStatus,
+      COMMANDS.audioServices,
+      COMMANDS.audioInfo,
+      COMMANDS.audioSinks,
+      COMMANDS.audioSources,
+      COMMANDS.audioLogs
+    ]
+  },
+  "restart-user-audio-services": {
+    id: "restart-user-audio-services",
+    title: "重启用户级音频服务",
+    description: "在当前用户会话中重启 PipeWire、PulseAudio 兼容层和 WirePlumber。",
+    module: "repair",
+    risk: "moderate",
+    requiresRoot: false,
+    previewCommands: [
+      COMMANDS.audioStatus,
+      "systemctl --user restart pipewire pipewire-pulse wireplumber",
+      COMMANDS.audioInfo
+    ]
+  },
+  "export-package-manager-check-report": {
+    id: "export-package-manager-check-report",
+    title: "导出包管理检查结果",
+    description: "导出 apt 源、dpkg 状态、锁定包和日志的检查结果。",
+    module: "support",
+    risk: "safe",
+    requiresRoot: false,
+    previewCommands: [
+      COMMANDS.aptPolicy,
+      COMMANDS.dpkgAudit,
+      COMMANDS.aptHolds,
+      COMMANDS.aptSources,
+      COMMANDS.aptLogs
     ]
   },
   "export-queue-blueprint": {
@@ -354,6 +448,72 @@ const ACTIONS = {
       "chmod 755 /usr/lib/cups/filter/*",
       "systemctl restart cups",
       "systemctl is-active cups"
+    ]
+  },
+  "export-network-check": {
+    id: "export-network-check",
+    title: "导出网络检查结果",
+    description: "收集网卡状态、地址、DNS 和近期 NetworkManager 日志，方便先判断问题落在哪一层。",
+    module: "network",
+    risk: "safe",
+    requiresRoot: false,
+    previewCommands: NETWORK_CHECK_COMMANDS
+  },
+  "restart-network-manager": {
+    id: "restart-network-manager",
+    title: "重启网络服务",
+    description: "重启 NetworkManager，并在动作结束后回读网卡状态和服务状态。",
+    module: "network",
+    risk: "privileged",
+    requiresRoot: true,
+    previewCommands: [
+      "systemctl is-active NetworkManager",
+      "systemctl restart NetworkManager",
+      "nmcli dev status"
+    ]
+  },
+  "export-audio-check": {
+    id: "export-audio-check",
+    title: "导出音频检查结果",
+    description: "收集 PipeWire、WirePlumber、默认输出设备和最近日志，先把音频链路看清楚。",
+    module: "audio",
+    risk: "safe",
+    requiresRoot: false,
+    previewCommands: AUDIO_CHECK_COMMANDS
+  },
+  "restart-audio-session": {
+    id: "restart-audio-session",
+    title: "重启音频会话服务",
+    description: "重启当前用户会话下的 PipeWire、PipeWire Pulse 和 WirePlumber。",
+    module: "audio",
+    risk: "moderate",
+    requiresRoot: false,
+    previewCommands: [
+      "systemctl --user restart pipewire pipewire-pulse wireplumber",
+      "pactl info",
+      "pactl list short sinks"
+    ]
+  },
+  "export-install-check": {
+    id: "export-install-check",
+    title: "导出安装检查结果",
+    description: "收集软件源、dpkg 异常、磁盘空间和包管理状态，先判断是源、依赖还是空间问题。",
+    module: "install",
+    risk: "safe",
+    requiresRoot: false,
+    previewCommands: INSTALL_CHECK_COMMANDS
+  },
+  "repair-package-state": {
+    id: "repair-package-state",
+    title: "修复包管理状态",
+    description: "尝试执行 dpkg 收尾和 apt 依赖修复，适合软件安装失败或系统更新中断后的收口。",
+    module: "install",
+    risk: "privileged",
+    requiresRoot: true,
+    previewCommands: [
+      "dpkg --configure -a",
+      "apt-get -f install -y",
+      "apt-cache policy"
     ]
   }
 };
@@ -542,7 +702,7 @@ function summarizeAuthorization(action, privilegeContext) {
       preferredMethod: "direct",
       methods: ["direct"],
       summary: "当前动作不需要管理员权限，API 可以直接执行。",
-      detail: "这类动作只读或仅影响当前用户可访问的打印队列。"
+      detail: "这类动作只读，或只影响当前用户会话内可访问的资源。"
     };
   }
 
@@ -904,31 +1064,176 @@ function detectSymptom(lpstat, logs, printerDetected) {
   return "打印队列卡住";
 }
 
-function buildRecommendations(symptom) {
-  const base = {
-    无法识别设备: [
-      "lsusb",
-      "dmesg | tail -n 40",
-      "lpinfo -v"
-    ],
-    打印队列卡住: [
-      "lpstat -t",
-      "cancel -a",
-      "sudo systemctl restart cups"
-    ],
-    "驱动 / 过滤链异常": [
-      "lpstat -p -d",
-      "journalctl -u cups --since '30 min ago'",
-      "sudo apt reinstall cups printer-driver-all"
-    ],
-    "纸宽或输出异常": [
-      "lpoptions -p printer_name -l",
-      "lpstat -t",
-      "journalctl -u cups --since '15 min ago'"
-    ]
+function buildRecommendations(diagnostics) {
+  const recommendations = [];
+  const push = (...items) => {
+    for (const item of items) {
+      if (item && !recommendations.includes(item)) {
+        recommendations.push(item);
+      }
+    }
   };
 
-  return base[symptom] || base["打印队列卡住"];
+  const symptom = diagnostics?.inference?.symptom || "打印队列卡住";
+  const printerQueues = diagnostics?.printers?.queues || [];
+
+  if (symptom === "无法识别设备") {
+    push("lsusb", "lpinfo -v");
+  } else if (symptom === "打印队列卡住") {
+    push("lpstat -t", "cancel -a", "restart-cups-service");
+  } else if (symptom === "驱动 / 过滤链异常") {
+    push("lpstat -p -d", "repair-print-stack", "restart-cups-service");
+  } else if (symptom === "纸宽或输出异常") {
+    push("lpoptions -p printer_name -l", "export-ppd-tuning-plan");
+  }
+
+  if (diagnostics?.network?.needsAttention) {
+    push(
+      "export-network-check",
+      "nmcli dev status",
+      "ip -brief address",
+      "resolvectl status"
+    );
+  }
+
+  if (diagnostics?.audio?.needsAttention) {
+    push(
+      "export-audio-check",
+      "restart-audio-session",
+      "systemctl --user status pipewire pipewire-pulse wireplumber"
+    );
+  }
+
+  if (diagnostics?.packageManager?.needsAttention) {
+    push(
+      "export-install-check",
+      "dpkg --audit",
+      "apt-cache policy"
+    );
+  }
+
+  if (printerQueues.length > 0 && !recommendations.includes("export-workorder")) {
+    push("export-workorder");
+  }
+
+  if (recommendations.length === 0) {
+    push("collect-support-bundle", "export-workorder");
+  }
+
+  return recommendations;
+}
+
+function parseResolvectl(raw) {
+  const lines = splitLines(raw);
+  const dnsLines = lines.filter((line) => /DNS Servers?:|Current DNS Server:|DNS Domain:|DNSSEC:/i.test(line));
+
+  return {
+    lines,
+    dnsLines,
+    summary:
+      dnsLines.slice(0, 2).join(" | ") ||
+      lines[0] ||
+      "DNS status unavailable"
+  };
+}
+
+function parseAudioState(statusRaw, infoRaw, sinksRaw, sourcesRaw, logsRaw) {
+  const statusLines = splitLines(statusRaw);
+  const infoLines = splitLines(infoRaw);
+  const sinkLines = splitLines(sinksRaw);
+  const sourceLines = splitLines(sourcesRaw);
+  const logLines = splitLines(logsRaw);
+  const defaultSink = firstMatchingLine(infoLines, /^Default Sink:/i)
+    .split(":")
+    .slice(1)
+    .join(":")
+    .trim();
+  const defaultSource = firstMatchingLine(infoLines, /^Default Source:/i)
+    .split(":")
+    .slice(1)
+    .join(":")
+    .trim();
+  const serverName = firstMatchingLine(infoLines, /^Server Name:/i)
+    .split(":")
+    .slice(1)
+    .join(":")
+    .trim();
+  const issues = [];
+
+  if (statusLines.length === 0) {
+    issues.push("未能读取用户级音频服务状态");
+  }
+
+  if (statusLines.some((line) => !/^active$/i.test(line))) {
+    issues.push("存在未激活的音频服务");
+  }
+
+  if (infoLines.some((line) => /Connection failure|Failed|No servers|Error/i.test(line))) {
+    issues.push("Pactl 连接异常");
+  }
+
+  if (sinkLines.length === 0) {
+    issues.push("未枚举到输出设备");
+  }
+
+  if (sourceLines.length === 0) {
+    issues.push("未枚举到输入设备");
+  }
+
+  return {
+    statusLines,
+    infoLines,
+    sinkLines,
+    sourceLines,
+    logLines,
+    defaultSink,
+    defaultSource,
+    serverName,
+    issues,
+    needsAttention: issues.length > 0,
+    summary:
+      issues.length > 0
+        ? issues[0]
+        : [defaultSink || "default sink unavailable", defaultSource || "default source unavailable"]
+            .filter(Boolean)
+            .join(" | ")
+  };
+}
+
+function parsePackageManagerState(policyRaw, auditRaw, holdsRaw, sourcesRaw, logsRaw) {
+  const policyLines = splitLines(policyRaw);
+  const auditLines = splitLines(auditRaw);
+  const holdLines = splitLines(holdsRaw);
+  const sourceLines = splitLines(sourcesRaw);
+  const logLines = splitLines(logsRaw);
+  const issues = [];
+
+  if (auditLines.length > 0) {
+    issues.push("dpkg 发现未完成的包状态");
+  }
+
+  if (holdLines.length > 0) {
+    issues.push("存在被锁定的包");
+  }
+
+  if (sourceLines.length === 0) {
+    issues.push("未读取到 apt 源配置");
+  }
+
+  return {
+    policyLines,
+    auditLines,
+    holdLines,
+    sourceLines,
+    logLines,
+    issues,
+    needsAttention: issues.length > 0,
+    summary:
+      issues.length > 0
+        ? issues[0]
+        : policyLines[0] ||
+          "apt 状态正常"
+  };
 }
 
 function splitLines(value) {
@@ -1099,45 +1404,30 @@ function buildRepairPlan(topic, diagnostics) {
       questions: ["当前是没有声音、麦克风异常，还是某个播放器没有输出？"],
       steps: [
         "确认 PipeWire / WirePlumber 状态",
-        "检查默认输出设备和音量",
+        "导出当前音频检查结果，确认默认输出和输入设备",
         "再判断是否需要重启用户会话音频服务"
       ],
-      commands: [
-        "systemctl --user status pipewire pipewire-pulse wireplumber",
-        "pactl info",
-        "pactl list short sinks",
-        "journalctl --user -u pipewire --since '10 min ago' --no-pager -n 60"
-      ],
+      commands: ["export-audio-check-report", "restart-user-audio-services"],
       followUp: "如果服务状态正常，再看应用本身是否选错了输出设备。"
     },
     network: {
       questions: ["网络是完全断开，还是能连 Wi-Fi 但不能上网？"],
       steps: [
         "确认网卡和地址状态",
-        "检查 NetworkManager 和 DNS",
+        "导出当前网络检查结果，确认路由和 DNS",
         "再决定是重连网络还是刷新配置"
       ],
-      commands: [
-        "nmcli dev status",
-        "ip -brief address",
-        "journalctl -u NetworkManager --since '10 min ago' --no-pager -n 60",
-        "resolvectl status"
-      ],
+      commands: ["export-network-check-report"],
       followUp: "如果地址和 DNS 都正常，再进一步排查路由和网关。"
     },
     install: {
       questions: ["要安装的具体软件名是什么，或者是从应用商店、deb 包还是容器安装？"],
       steps: [
         "确认安装目标和软件来源",
-        "检查软件源和包管理状态",
+        "导出包管理检查结果，确认 apt 和 dpkg 状态",
         "再决定是 apt、应用商店还是 flatpak 路线"
       ],
-      commands: [
-        "apt-cache policy",
-        "apt update",
-        "journalctl -u apt-daily --since '10 min ago' --no-pager -n 40",
-        "grep -R '^deb ' /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null"
-      ],
+      commands: ["export-package-manager-check-report"],
       followUp: "先把包管理状态确认清楚，再执行安装。"
     },
     driver: {
@@ -1633,30 +1923,38 @@ function buildSystemRepairAgentRun(prompt, context, diagnostics) {
   const inferredRoute =
     topic.id === "printer" || topic.id === "driver"
       ? "stack-repair"
+      : topic.id === "audio"
+        ? "audio-check"
+        : topic.id === "network"
+          ? "network-check"
+          : topic.id === "install"
+            ? "install-health"
       : diagnostics?.solutionPlan?.route || topic.id;
   const topicSummaryById = {
     printer:
       "优先按“删除旧队列 -> 重装关键驱动包 -> 修复 CUPS 过滤链权限”的顺序处理。",
     driver:
       "优先按“删除旧队列 -> 重装关键驱动包 -> 修复 CUPS 过滤链权限”的顺序处理。",
-    audio: `${topic.summary}${diagnostics?.services?.summary ? ` 当前服务状态：${diagnostics.services.summary}。` : ""}`,
+    audio: `${topic.summary}${diagnostics?.audio?.summary ? ` 当前音频状态：${diagnostics.audio.summary}。` : diagnostics?.services?.summary ? ` 当前服务状态：${diagnostics.services.summary}。` : ""}`,
     network: `${topic.summary}${diagnostics?.network?.summary ? ` 当前网络状态：${diagnostics.network.summary}。` : ""}`,
     install: `${topic.summary}${
-      diagnostics?.resources?.storage?.summary
-        ? ` 当前磁盘状态：${diagnostics.resources.storage.summary}。`
-        : ""
+      diagnostics?.packageManager?.summary
+        ? ` 当前包管理状态：${diagnostics.packageManager.summary}。`
+        : diagnostics?.resources?.storage?.summary
+          ? ` 当前磁盘状态：${diagnostics.resources.storage.summary}。`
+          : ""
     }`,
     generic: "先做基础系统状态收敛。"
   };
   const focus = topicSummaryById[topic.id] || topic.summary || "先做基础系统状态收敛。";
   const promptLine = prompt ? `用户输入：${prompt}` : "用户输入：未提供";
   const diagnosticHint = diagnostics
-    ? topic.id === "network"
-      ? `系统状态：${diagnostics.network.summary} / ${diagnostics.services.summary}`
+      ? topic.id === "network"
+      ? `系统状态：${diagnostics.network.summary} / ${diagnostics.network.dnsSummary || "DNS 未单独提取"}`
       : topic.id === "install"
-        ? `系统状态：${diagnostics.resources.storage.summary} / ${diagnostics.services.summary}`
+        ? `系统状态：${diagnostics.packageManager.summary} / ${diagnostics.resources.storage.summary}`
         : topic.id === "audio"
-          ? `系统状态：${diagnostics.services.summary} / ${diagnostics.network.summary}`
+          ? `系统状态：${diagnostics.audio.summary} / ${diagnostics.audio.defaultSink || "default sink unavailable"}`
           : `系统状态：${diagnostics.services.summary} / ${diagnostics.printers.summary}`
     : "系统状态：未采集";
   const commands = plan.commands;
@@ -2377,6 +2675,11 @@ function buildIntelligentPlan(diagnostics) {
   const deviceLabel = diagnostics.inference.device || "通用打印机";
   const connection = diagnostics.inference.connection || "Unknown";
   const queueCount = diagnostics.printers.queues.length;
+  const audioNeedsAttention = Boolean(diagnostics.audio?.needsAttention);
+  const networkNeedsAttention = Boolean(
+    !diagnostics.network?.online || diagnostics.network?.liveLines.length === 0
+  );
+  const packageNeedsAttention = Boolean(diagnostics.packageManager?.needsAttention);
   const ppdRelevant =
     symptom === "纸宽或输出异常" ||
     deviceLabel === "标签打印机" ||
@@ -2388,6 +2691,12 @@ function buildIntelligentPlan(diagnostics) {
         ? "queue-recovery"
         : symptom === "驱动 / 过滤链异常"
           ? "stack-repair"
+          : audioNeedsAttention
+            ? "audio-check"
+            : networkNeedsAttention
+              ? "network-check"
+              : packageNeedsAttention
+                ? "install-health"
           : "ppd-tuning";
   const confidence =
     symptom === "无法识别设备"
@@ -2396,7 +2705,13 @@ function buildIntelligentPlan(diagnostics) {
         ? 82
         : symptom === "驱动 / 过滤链异常"
           ? 74
-          : 79;
+          : audioNeedsAttention
+            ? 76
+            : networkNeedsAttention
+              ? 77
+              : packageNeedsAttention
+                ? 72
+                : 79;
   const actions =
     route === "discover"
       ? [
@@ -2424,6 +2739,19 @@ function buildIntelligentPlan(diagnostics) {
             "validate-ppd-patch-copy",
             "apply-validated-ppd-copy",
             "rollback-ppd-backup"
+          ]
+      : route === "audio-check"
+        ? [
+            "export-audio-check-report",
+            "restart-user-audio-services"
+          ]
+      : route === "network-check"
+        ? [
+            "export-network-check-report"
+          ]
+      : route === "install-health"
+        ? [
+            "export-package-manager-check-report"
           ]
           : [
               "export-ppd-tuning-plan",
@@ -2468,6 +2796,30 @@ function buildIntelligentPlan(diagnostics) {
                 "restart-cups-service",
                 "run-queue-regression-check"
               ]
+            }
+            ]
+      : route === "audio-check"
+        ? [
+            {
+              title: "导出音频状态",
+              summary: "先看用户级音频服务、默认输出设备和输入设备，再决定是否重启会话服务。",
+              commands: ["export-audio-check-report", "restart-user-audio-services"]
+            }
+          ]
+      : route === "network-check"
+        ? [
+            {
+              title: "导出网络状态",
+              summary: "先看网卡地址、路由和 DNS，再判断是断网还是解析异常。",
+              commands: ["export-network-check-report"]
+            }
+          ]
+      : route === "install-health"
+        ? [
+            {
+              title: "导出包管理状态",
+              summary: "先看 apt 源、dpkg 状态和锁定包，再决定是否进入安装修复。",
+              commands: ["export-package-manager-check-report"]
             }
           ]
       : route === "stack-repair"
@@ -2518,7 +2870,13 @@ function buildIntelligentPlan(diagnostics) {
     notes.push("当前系统没有现成打印队列，任何 PPD 调整都应该建立在新队列蓝图之上。");
   }
 
-  if (ppdRelevant) {
+  if (route === "audio-check") {
+    notes.push("先导出音频检查结果，再看是否需要重启当前用户会话的音频服务。");
+  } else if (route === "network-check") {
+    notes.push("先导出网络检查结果，确认地址、路由和 DNS，再决定是否继续修复。");
+  } else if (route === "install-health") {
+    notes.push("先导出包管理检查结果，确认 apt、dpkg 和锁定包状态，再考虑安装。");
+  } else if (ppdRelevant) {
     notes.push("当前症状与 PPD 或输出参数相关，但默认仍应优先确保打印栈和队列稳定。");
   } else {
     notes.push("当前症状更像链路或队列问题，不建议一开始就直接改 PPD。");
@@ -2536,7 +2894,13 @@ function buildIntelligentPlan(diagnostics) {
     route,
     confidence,
     headline:
-      route === "ppd-tuning"
+      route === "audio-check"
+        ? "先导出音频检查结果，必要时重启用户级音频服务"
+        : route === "network-check"
+          ? "先导出网络检查结果，再判断是否需要继续修复"
+          : route === "install-health"
+            ? "先看包管理状态，再决定是否进入安装修复"
+            : route === "ppd-tuning"
         ? "适合进入 PPD 微调和输出参数校正"
         : route === "stack-repair"
           ? "优先按三步链修复打印驱动，再考虑 PPD 细调"
@@ -2588,7 +2952,7 @@ function actionWarnings(action, authorization) {
   }
 
   if (action.risk === "moderate") {
-    warnings.push("该动作会改变当前打印队列状态，执行前请确认没有正在进行的重要作业。");
+    warnings.push("该动作会改变当前会话或服务状态，执行前请确认没有正在进行的重要任务。");
   }
 
   if (action.risk === "privileged") {
@@ -2601,6 +2965,18 @@ function actionWarnings(action, authorization) {
 
   if (action.id === "repair-print-stack") {
     warnings.push("该动作会调用软件包重装流程，执行时间可能较长，并依赖本机包缓存或软件源。");
+  }
+
+  if (action.id === "restart-network-manager") {
+    warnings.push("该动作会短暂中断当前网络连接，远程会话环境下请谨慎执行。");
+  }
+
+  if (action.id === "restart-audio-session") {
+    warnings.push("该动作会重启当前用户的音频会话，正在播放的声音会短暂中断。");
+  }
+
+  if (action.id === "repair-package-state") {
+    warnings.push("该动作会修改系统包管理状态，执行时间可能较长，也依赖当前软件源是否可用。");
   }
 
   if (action.id === "apply-queue-blueprint") {
@@ -2708,6 +3084,30 @@ function rollbackSuggestions(actionId) {
     "repair-print-stack": [
       "如果重装后问题仍在，先检查软件源、包依赖和 `journalctl -u cups`。",
       "如果只是厂商驱动损坏，不要反复全量重装，改为重建队列或补装专用驱动。"
+    ],
+    "export-network-check": [
+      "网络检查结果是只读导出，不需要回滚。",
+      "如果环境已经变化，重新导出一份新的检查结果即可。"
+    ],
+    "restart-network-manager": [
+      "如果重启后仍然没有恢复网络，先查看 `nmcli dev status`、`ip -brief address` 和日志输出。",
+      "如果是远程环境，不要反复重启网络服务，先确认链路没有断开管理通道。"
+    ],
+    "export-audio-check": [
+      "音频检查结果是只读导出，不需要回滚。",
+      "如果音频设备状态变化，重新导出一份新的检查结果即可。"
+    ],
+    "restart-audio-session": [
+      "如果重启后声音仍然没有恢复，先确认默认输出设备和静音状态。",
+      "如果只是单个应用没有声音，优先检查应用本身的输出设备选择。"
+    ],
+    "export-install-check": [
+      "安装检查结果是只读导出，不需要回滚。",
+      "如果包源、空间或依赖状态变化，重新导出一份新的检查结果即可。"
+    ],
+    "repair-package-state": [
+      "如果修复后仍然报依赖错误，先查看软件源和磁盘空间，再决定是否继续安装目标软件。",
+      "如果是第三方仓库导致的问题，先停掉异常源，再重新整理包管理状态。"
     ]
   };
 
@@ -2777,6 +3177,9 @@ function buildWorkorderMarkdown(diagnostics) {
     `- Distro: ${diagnostics.system.prettyName}`,
     `- Kernel: ${diagnostics.system.kernel}`,
     `- Network: ${diagnostics.network.summary}`,
+    `- Network DNS: ${diagnostics.network.dnsSummary || "unknown"}`,
+    `- Audio: ${diagnostics.audio?.summary || "unknown"}`,
+    `- Package Manager: ${diagnostics.packageManager?.summary || "unknown"}`,
     `- Memory: ${diagnostics.resources.memory.used} / ${diagnostics.resources.memory.total}`,
     `- Storage: ${diagnostics.resources.storage.summary}`,
     `- Failed Units: ${diagnostics.services.failedUnits.count}`,
@@ -2803,6 +3206,29 @@ function buildWorkorderMarkdown(diagnostics) {
       return [`### ${item.name}`, "", "```text", preview, "```", ""].join("\n");
     })
   ].join("\n");
+}
+
+function pickCommandPreviews(diagnostics, names) {
+  const wanted = new Set(names);
+  return diagnostics.commands.filter((item) => wanted.has(item.name));
+}
+
+function buildSystemCheckPayload(kind, diagnostics, commandNames, extra = {}) {
+  return {
+    generatedAt: new Date().toISOString(),
+    kind,
+    host: diagnostics.host,
+    system: diagnostics.system,
+    services: diagnostics.services,
+    network: diagnostics.network,
+    audio: diagnostics.audio,
+    packageManager: diagnostics.packageManager,
+    printers: diagnostics.printers,
+    commands: pickCommandPreviews(diagnostics, commandNames),
+    recommendations: diagnostics.recommendations,
+    solutionPlan: diagnostics.solutionPlan,
+    ...extra
+  };
 }
 
 function buildReceiptWriterLines(actionId, detailVars = []) {
@@ -2890,6 +3316,47 @@ function repairPrintStackScriptLines() {
     'SUMMARY="Core print stack reinstall and permission repair attempted"',
     'STATUS=completed',
     'if [ "$INSTALL_OK" != "true" ] || [ "$PERMISSIONS_OK" != "true" ] || [ "$RESTART_OK" != "true" ] || [ "$POSTCHECK" != "active" ]; then STATUS=failed; fi'
+  ];
+}
+
+function restartNetworkManagerScriptLines() {
+  return [
+    'DETAIL_ONE="service: NetworkManager"',
+    'echo "[Orbit] Restarting NetworkManager"',
+    'PRECHECK="$(systemctl is-active NetworkManager 2>&1 || true)"',
+    "RESTART_OK=true",
+    "if ! systemctl restart NetworkManager; then",
+    "  RESTART_OK=false",
+    "fi",
+    'POSTCHECK="$(systemctl is-active NetworkManager 2>&1 || true)"',
+    'NMCLI_OUTPUT="$(nmcli dev status 2>&1 || true)"',
+    'DETAIL_TWO="pre-check: $PRECHECK"',
+    'DETAIL_THREE="post-check: $POSTCHECK"',
+    'SUMMARY="NetworkManager restart attempted"',
+    'STATUS=completed',
+    'if [ "$RESTART_OK" != "true" ] || [ "$POSTCHECK" != "active" ]; then STATUS=failed; fi'
+  ];
+}
+
+function repairPackageStateScriptLines() {
+  return [
+    'DETAIL_ONE="package state repair"',
+    'echo "[Orbit] Repairing package state"',
+    "export DEBIAN_FRONTEND=noninteractive",
+    "CONFIGURE_OK=true",
+    "FIX_OK=true",
+    "if ! dpkg --configure -a; then",
+    "  CONFIGURE_OK=false",
+    "fi",
+    "if ! apt-get -f install -y; then",
+    "  FIX_OK=false",
+    "fi",
+    'POLICY_OUTPUT="$(apt-cache policy 2>&1 || true)"',
+    'DETAIL_TWO="dpkg configure: $CONFIGURE_OK"',
+    'DETAIL_THREE="apt fix-broken: $FIX_OK"',
+    'SUMMARY="Package state repair attempted"',
+    'STATUS=completed',
+    'if [ "$CONFIGURE_OK" != "true" ] || [ "$FIX_OK" != "true" ]; then STATUS=failed; fi'
   ];
 }
 
@@ -3101,6 +3568,181 @@ function buildPendingActionScript(action, diagnostics, manualExecution, params =
     ].join("\n");
   }
 
+  if (action.id === "export-network-check") {
+    const networkReport = buildSystemCheckPayload(
+      "network",
+      diagnostics,
+      ["network", "networkManager", "networkRoute", "networkDns", "networkLogs"],
+      {
+        summary: diagnostics.network.summary,
+        focus: diagnostics.network.needsAttention
+          ? "当前网络还需要继续看路由和 DNS。"
+          : "当前网络看起来是在线的。"
+      }
+    );
+    const reportPath = path.join(
+      ARTIFACTS_DIR,
+      "system-checks",
+      `network-check-${artifactTimestamp()}.json`
+    );
+
+    return [
+      "#!/usr/bin/env bash",
+      "set -uo pipefail",
+      "",
+      "# Generated by Orbit Deepin Assistant",
+      `# Action: ${action.id}`,
+      `# GeneratedAt: ${new Date().toISOString()}`,
+      `# Host: ${diagnostics.host.hostname}`,
+      `# Distro: ${diagnostics.system.prettyName}`,
+      "",
+      `REPORT_PATH=${shellQuote(reportPath)}`,
+      "mkdir -p \"$(dirname \"$REPORT_PATH\")\"",
+      `cat > "$REPORT_PATH" <<'JSON'`,
+      JSON.stringify(networkReport, null, 2),
+      "JSON",
+      "echo \"[Orbit] Network check report written to $REPORT_PATH\""
+    ].join("\n");
+  }
+
+  if (action.id === "export-audio-check") {
+    const audioReport = buildSystemCheckPayload(
+      "audio",
+      diagnostics,
+      ["audioStatus", "audioServices", "audioInfo", "audioSinks", "audioSources", "audioLogs"],
+      {
+        summary: diagnostics.audio.summary,
+        focus: diagnostics.audio.needsAttention
+          ? "当前音频链路需要再看用户服务和输出设备。"
+          : "当前音频状态看起来可用。"
+      }
+    );
+    const reportPath = path.join(
+      ARTIFACTS_DIR,
+      "system-checks",
+      `audio-check-${artifactTimestamp()}.json`
+    );
+
+    return [
+      "#!/usr/bin/env bash",
+      "set -uo pipefail",
+      "",
+      "# Generated by Orbit Deepin Assistant",
+      `# Action: ${action.id}`,
+      `# GeneratedAt: ${new Date().toISOString()}`,
+      `# Host: ${diagnostics.host.hostname}`,
+      `# Distro: ${diagnostics.system.prettyName}`,
+      "",
+      `REPORT_PATH=${shellQuote(reportPath)}`,
+      "mkdir -p \"$(dirname \"$REPORT_PATH\")\"",
+      `cat > "$REPORT_PATH" <<'JSON'`,
+      JSON.stringify(audioReport, null, 2),
+      "JSON",
+      "echo \"[Orbit] Audio check report written to $REPORT_PATH\""
+    ].join("\n");
+  }
+
+  if (action.id === "export-install-check") {
+    const packageReport = buildSystemCheckPayload(
+      "install",
+      diagnostics,
+      ["aptPolicy", "dpkgAudit", "aptHolds", "aptSources", "aptLogs", "storage"],
+      {
+        summary: diagnostics.packageManager.summary,
+        focus: diagnostics.packageManager.needsAttention
+          ? "当前包管理状态需要继续看 dpkg 和软件源。"
+          : "当前包管理状态看起来正常。"
+      }
+    );
+    const reportPath = path.join(
+      ARTIFACTS_DIR,
+      "system-checks",
+      `install-check-${artifactTimestamp()}.json`
+    );
+
+    return [
+      "#!/usr/bin/env bash",
+      "set -uo pipefail",
+      "",
+      "# Generated by Orbit Deepin Assistant",
+      `# Action: ${action.id}`,
+      `# GeneratedAt: ${new Date().toISOString()}`,
+      `# Host: ${diagnostics.host.hostname}`,
+      `# Distro: ${diagnostics.system.prettyName}`,
+      "",
+      `REPORT_PATH=${shellQuote(reportPath)}`,
+      "mkdir -p \"$(dirname \"$REPORT_PATH\")\"",
+      `cat > "$REPORT_PATH" <<'JSON'`,
+      JSON.stringify(packageReport, null, 2),
+      "JSON",
+      "echo \"[Orbit] Install check report written to $REPORT_PATH\""
+    ].join("\n");
+  }
+
+  if (action.id === "restart-network-manager") {
+    return [
+      "#!/usr/bin/env bash",
+      "set -uo pipefail",
+      "",
+      "# Generated by Orbit Deepin Assistant",
+      `# Action: ${action.id}`,
+      `# GeneratedAt: ${new Date().toISOString()}`,
+      `# Host: ${diagnostics.host.hostname}`,
+      `# Distro: ${diagnostics.system.prettyName}`,
+      "",
+      `HANDOFF_ID=${shellQuote(manualExecution.id)}`,
+      `RECEIPT_PATH=${shellQuote(manualExecution.receiptArtifact.path)}`,
+      `LOG_PATH=${shellQuote(manualExecution.runtimeLog.path)}`,
+      "mkdir -p \"$(dirname \"$RECEIPT_PATH\")\"",
+      "mkdir -p \"$(dirname \"$LOG_PATH\")\"",
+      ": > \"$LOG_PATH\"",
+      "exec > >(tee -a \"$LOG_PATH\") 2>&1",
+      "STARTED_AT=\"$(date --iso-8601=seconds 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S%z')\"",
+      "EXECUTED_BY=\"$(id -un 2>/dev/null || printf '%s' root)\"",
+      ...restartNetworkManagerScriptLines(),
+      "FINISHED_AT=\"$(date --iso-8601=seconds 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S%z')\"",
+      ...buildReceiptWriterLines(action.id, ["DETAIL_ONE", "DETAIL_TWO", "DETAIL_THREE"]),
+      "echo \"[Orbit] Receipt written to $RECEIPT_PATH\"",
+      "echo \"[Orbit] Status: $STATUS\"",
+      "if [ \"$STATUS\" = \"completed\" ]; then",
+      "  exit 0",
+      "fi",
+      "exit 1"
+    ].join("\n");
+  }
+
+  if (action.id === "repair-package-state") {
+    return [
+      "#!/usr/bin/env bash",
+      "set -uo pipefail",
+      "",
+      "# Generated by Orbit Deepin Assistant",
+      `# Action: ${action.id}`,
+      `# GeneratedAt: ${new Date().toISOString()}`,
+      `# Host: ${diagnostics.host.hostname}`,
+      `# Distro: ${diagnostics.system.prettyName}`,
+      "",
+      `HANDOFF_ID=${shellQuote(manualExecution.id)}`,
+      `RECEIPT_PATH=${shellQuote(manualExecution.receiptArtifact.path)}`,
+      `LOG_PATH=${shellQuote(manualExecution.runtimeLog.path)}`,
+      "mkdir -p \"$(dirname \"$RECEIPT_PATH\")\"",
+      "mkdir -p \"$(dirname \"$LOG_PATH\")\"",
+      ": > \"$LOG_PATH\"",
+      "exec > >(tee -a \"$LOG_PATH\") 2>&1",
+      "STARTED_AT=\"$(date --iso-8601=seconds 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S%z')\"",
+      "EXECUTED_BY=\"$(id -un 2>/dev/null || printf '%s' root)\"",
+      ...repairPackageStateScriptLines(),
+      "FINISHED_AT=\"$(date --iso-8601=seconds 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S%z')\"",
+      ...buildReceiptWriterLines(action.id, ["DETAIL_ONE", "DETAIL_TWO", "DETAIL_THREE"]),
+      "echo \"[Orbit] Receipt written to $RECEIPT_PATH\"",
+      "echo \"[Orbit] Status: $STATUS\"",
+      "if [ \"$STATUS\" = \"completed\" ]; then",
+      "  exit 0",
+      "fi",
+      "exit 1"
+    ].join("\n");
+  }
+
   if (action.id === "apply-queue-blueprint") {
     const queueProvisioning = params;
 
@@ -3280,6 +3922,10 @@ async function createManualExecutionPlan(
         ? "本次没有直接删除队列，已生成待授权的队列重置脚本。"
         : action.id === "repair-print-stack"
           ? "本次没有直接重装打印栈，已生成待授权的修复脚本。"
+          : action.id === "restart-network-manager"
+            ? "本次没有直接重启网络服务，已生成待授权的处理脚本。"
+            : action.id === "repair-package-state"
+              ? "本次没有直接修复包管理状态，已生成待授权的处理脚本。"
           : action.id === "apply-queue-blueprint"
             ? "本次没有直接创建打印队列，已生成待授权的建队列脚本。"
           : action.id === "apply-validated-ppd-copy"
@@ -3299,6 +3945,10 @@ async function createManualExecutionPlan(
         ? "授权完成后，脚本会清理旧作业并删除当前检测到的打印队列。"
         : action.id === "repair-print-stack"
           ? "授权完成后，脚本会重装核心打印包并重启 CUPS。"
+          : action.id === "restart-network-manager"
+            ? "授权完成后，脚本会重启 NetworkManager，并回读服务和网卡状态。"
+            : action.id === "repair-package-state"
+              ? "授权完成后，脚本会执行 dpkg 收尾和 apt 依赖修复。"
           : action.id === "apply-queue-blueprint"
             ? "授权完成后，脚本会创建真实打印队列，并根据参数决定是否设为默认打印机。"
           : action.id === "apply-validated-ppd-copy"
@@ -3369,13 +4019,13 @@ async function executeAction(actionId, mode = "preview", params = {}) {
     detectPrivilegeContext()
   ]);
   const authorization = summarizeAuthorization(action, privilegeContext);
-  timeline.push(
-    timelineEvent(
-      "ok",
-      "Diagnostics captured",
-      "已获取系统、网络、资源、打印链路和日志快照。"
-    )
-  );
+    timeline.push(
+      timelineEvent(
+        "ok",
+        "Diagnostics captured",
+        "已获取系统、网络、音频、包管理、资源、打印链路和日志快照。"
+      )
+    );
   const base = {
     action: {
       id: action.id,
@@ -5007,6 +5657,426 @@ async function executeAction(actionId, mode = "preview", params = {}) {
     return result;
   }
 
+  if (actionId === "export-network-check") {
+    const networkReport = buildSystemCheckPayload(
+      "network",
+      diagnostics,
+      ["network", "networkManager", "networkRoute", "networkDns", "networkLogs"],
+      {
+        summary: diagnostics.network.summary,
+        focus: diagnostics.network.needsAttention
+          ? "当前网络还需要继续看路由和 DNS。"
+          : "当前网络看起来是在线的。"
+      }
+    );
+    const reportPath = await writeArtifact(
+      "system-checks",
+      `network-check-${artifactTimestamp()}.json`,
+      JSON.stringify(networkReport, null, 2)
+    );
+
+    const result = {
+      ...base,
+      ok: true,
+      state: "completed",
+      summary: "Network check report exported",
+      artifact: {
+        path: reportPath,
+        type: "application/json"
+      },
+      networkReport,
+      followUp: [
+        "可以把这个报告作为网络排障附件。",
+        "如果仍然不通，再看 NetworkManager、DNS 和路由日志。"
+      ]
+    };
+
+    result.logArtifact = {
+      path: await writeActionLog(result),
+      type: "application/json"
+    };
+
+    return result;
+  }
+
+  if (actionId === "export-audio-check") {
+    const audioReport = buildSystemCheckPayload(
+      "audio",
+      diagnostics,
+      ["audioStatus", "audioServices", "audioInfo", "audioSinks", "audioSources", "audioLogs"],
+      {
+        summary: diagnostics.audio.summary,
+        focus: diagnostics.audio.needsAttention
+          ? "当前音频链路需要再看用户服务和输出设备。"
+          : "当前音频状态看起来可用。"
+      }
+    );
+    const reportPath = await writeArtifact(
+      "system-checks",
+      `audio-check-${artifactTimestamp()}.json`,
+      JSON.stringify(audioReport, null, 2)
+    );
+
+    const result = {
+      ...base,
+      ok: true,
+      state: "completed",
+      summary: "Audio check report exported",
+      artifact: {
+        path: reportPath,
+        type: "application/json"
+      },
+      audioReport,
+      followUp: [
+        "可以把这个报告作为音频排障附件。",
+        "如果声音服务异常，再尝试重启当前用户会话的音频服务。"
+      ]
+    };
+
+    result.logArtifact = {
+      path: await writeActionLog(result),
+      type: "application/json"
+    };
+
+    return result;
+  }
+
+  if (actionId === "export-install-check") {
+    const packageReport = buildSystemCheckPayload(
+      "install",
+      diagnostics,
+      ["aptPolicy", "dpkgAudit", "aptHolds", "aptSources", "aptLogs", "storage"],
+      {
+        summary: diagnostics.packageManager.summary,
+        focus: diagnostics.packageManager.needsAttention
+          ? "当前包管理状态需要继续看 dpkg 和软件源。"
+          : "当前包管理状态看起来正常。"
+      }
+    );
+    const reportPath = await writeArtifact(
+      "system-checks",
+      `install-check-${artifactTimestamp()}.json`,
+      JSON.stringify(packageReport, null, 2)
+    );
+
+    const result = {
+      ...base,
+      ok: true,
+      state: "completed",
+      summary: "Install check exported",
+      artifact: {
+        path: reportPath,
+        type: "application/json"
+      },
+      installReport: packageReport,
+      followUp: [
+        "可以把这个报告作为包管理排障附件。",
+        "如果 dpkg 或软件源异常，再进入安装修复流程。"
+      ]
+    };
+
+    result.logArtifact = {
+      path: await writeActionLog(result),
+      type: "application/json"
+    };
+
+    return result;
+  }
+
+  if (actionId === "restart-audio-session") {
+    const beforeStatus = await runShell(COMMANDS.audioStatus, 7000);
+    const restartResult = await runShell(
+      "systemctl --user restart pipewire pipewire-pulse wireplumber",
+      12000
+    );
+    const afterStatus = await runShell(COMMANDS.audioStatus, 7000);
+    const audioInfo = await runShell(COMMANDS.audioInfo, 7000);
+    const afterStatusLines = splitLines(afterStatus.stdout || afterStatus.stderr);
+    const allActive =
+      afterStatusLines.length > 0 && afterStatusLines.every((line) => line === "active");
+    const restartOkay = restartResult.ok && allActive;
+    const reportPath = await writeArtifact(
+      "system-checks",
+      `audio-restart-${artifactTimestamp()}.json`,
+      JSON.stringify(
+        buildSystemCheckPayload("audio-restart", diagnostics, ["audioStatus", "audioInfo"], {
+          beforeStatus: beforeStatus.stdout || beforeStatus.stderr,
+          restartOutput: restartResult.stdout || restartResult.stderr,
+          afterStatus: afterStatus.stdout || afterStatus.stderr,
+          pactlInfo: audioInfo.stdout || audioInfo.stderr
+        }),
+        null,
+        2
+      )
+    );
+    const result = {
+      ...base,
+      ok: restartOkay,
+      state: restartOkay ? "completed" : "failed",
+      summary: restartOkay
+        ? "Audio session restarted"
+        : "Failed to restart audio session",
+      artifact: {
+        path: reportPath,
+        type: "application/json"
+      },
+      commandResult: restartResult,
+      beforeStatus,
+      afterStatus,
+      audioInfo,
+      followUp: restartOkay
+        ? [
+            "现在可以重新播放一段声音或重新打开应用确认输出。",
+            "如果仍然没有声音，再看默认输出设备和应用自己的音频通道选择。"
+          ]
+        : [
+            "先确认当前桌面会话是否可用，再看 systemctl --user 是否能连到用户总线。",
+            "如果是在远程或无桌面环境里执行，建议回到真实图形会话里重试。"
+          ]
+    };
+
+    result.logArtifact = {
+      path: await writeActionLog(result),
+      type: "application/json"
+    };
+
+    return result;
+  }
+
+  if (actionId === "restart-network-manager") {
+    if (!authorization.canRunFromApi) {
+      const manualExecution = await createManualExecutionPlan(
+        action,
+        authorization,
+        diagnostics
+      );
+      timeline.push(
+        timelineEvent(
+          "blocked",
+          "Authorization handoff generated",
+          "当前 API 进程没有直接执行权限，已生成网络服务重启脚本。"
+        )
+      );
+
+      const result = {
+        ...base,
+        ok: false,
+        state: "blocked",
+        summary: "Authorization required before restarting NetworkManager",
+        artifact: manualExecution.artifact,
+        manualExecution,
+        followUp: [
+          "先在本机终端完成一次人工授权，再回来查看回执状态。",
+          "网络服务重启后，建议重新采集诊断，确认地址、路由和 DNS 是否恢复。"
+        ]
+      };
+
+      result.logArtifact = {
+        path: await writeActionLog(result),
+        type: "application/json"
+      };
+
+      return result;
+    }
+
+    const beforeStatus = await runShell(COMMANDS.networkManager, 7000);
+    const commandResult = await runPrivilegedShell(
+      "systemctl restart NetworkManager",
+      authorization,
+      20000
+    );
+    timeline.push(
+      timelineEvent(
+        commandResult.ok ? "ok" : "error",
+        "Restart attempted",
+        commandResult.ok ? "已发起 NetworkManager 重启。" : "NetworkManager 重启失败。"
+      )
+    );
+    const [serviceState, networkStatus, addressStatus, dnsStatus] = await Promise.all([
+      runShell("systemctl is-active NetworkManager", 7000),
+      runShell(COMMANDS.networkManager, 7000),
+      runShell(COMMANDS.network, 7000),
+      runShell(COMMANDS.networkDns, 7000)
+    ]);
+    const serviceActive = (serviceState.stdout || serviceState.stderr).trim() === "active";
+    const reportPath = await writeArtifact(
+      "system-checks",
+      `network-restart-${artifactTimestamp()}.json`,
+      JSON.stringify(
+        buildSystemCheckPayload(
+          "network-restart",
+          diagnostics,
+          ["network", "networkManager", "networkRoute", "networkDns", "networkLogs"],
+          {
+            beforeStatus: beforeStatus.stdout || beforeStatus.stderr,
+            restartOutput: commandResult.stdout || commandResult.stderr,
+            serviceState: serviceState.stdout || serviceState.stderr,
+            networkStatus: networkStatus.stdout || networkStatus.stderr,
+            addressStatus: addressStatus.stdout || addressStatus.stderr,
+            dnsStatus: dnsStatus.stdout || dnsStatus.stderr
+          }
+        ),
+        null,
+        2
+      )
+    );
+
+    const result = {
+      ...base,
+      ok: commandResult.ok && serviceActive,
+      state: commandResult.ok && serviceActive ? "completed" : "failed",
+      summary:
+        commandResult.ok && serviceActive
+          ? "Network service restarted"
+          : "Failed to restart network service",
+      artifact: {
+        path: reportPath,
+        type: "application/json"
+      },
+      commandResult,
+      beforeStatus,
+      serviceState,
+      networkStatus,
+      addressStatus,
+      dnsStatus,
+      followUp:
+        commandResult.ok && serviceActive
+          ? [
+              "服务已经重启，下一步看网卡地址、DNS 和真实联网状态有没有恢复。",
+              "如果只是某个 Wi-Fi 或代理配置异常，再继续看网络检查报告。"
+            ]
+          : [
+              "先看服务状态和命令输出，确认是权限、服务异常还是当前环境本身没有网络管理能力。",
+              "如果是远程环境，重启网络前先确认不会断开管理通道。"
+            ]
+    };
+
+    result.logArtifact = {
+      path: await writeActionLog(result),
+      type: "application/json"
+    };
+
+    return result;
+  }
+
+  if (actionId === "repair-package-state") {
+    if (!authorization.canRunFromApi) {
+      const manualExecution = await createManualExecutionPlan(
+        action,
+        authorization,
+        diagnostics
+      );
+      timeline.push(
+        timelineEvent(
+          "blocked",
+          "Authorization handoff generated",
+          "当前 API 进程没有直接执行权限，已生成包管理修复脚本。"
+        )
+      );
+
+      const result = {
+        ...base,
+        ok: false,
+        state: "blocked",
+        summary: "Authorization required before repairing package state",
+        artifact: manualExecution.artifact,
+        manualExecution,
+        followUp: [
+          "先在本机终端完成一次人工授权，再回来查看回执状态。",
+          "修复完成后，建议重新检查 dpkg 状态、软件源和磁盘空间。"
+        ]
+      };
+
+      result.logArtifact = {
+        path: await writeActionLog(result),
+        type: "application/json"
+      };
+
+      return result;
+    }
+
+    const beforeAudit = await runShell(COMMANDS.dpkgAudit, 7000);
+    const commandResult = await runPrivilegedShell(
+      [
+        "set -uo pipefail",
+        "export DEBIAN_FRONTEND=noninteractive",
+        "dpkg --configure -a",
+        "apt-get -f install -y"
+      ].join("\n"),
+      authorization,
+      45000
+    );
+    timeline.push(
+      timelineEvent(
+        commandResult.ok ? "ok" : "error",
+        "Repair attempted",
+        commandResult.ok ? "已尝试修复当前包管理状态。" : "包管理修复执行失败。"
+      )
+    );
+    const [afterAudit, policyStatus, storageStatus] = await Promise.all([
+      runShell(COMMANDS.dpkgAudit, 7000),
+      runShell(COMMANDS.aptPolicy, 7000),
+      runShell(COMMANDS.storage, 7000)
+    ]);
+    const unresolved = splitLines(afterAudit.stdout || afterAudit.stderr).length > 0;
+    const reportPath = await writeArtifact(
+      "system-checks",
+      `install-repair-${artifactTimestamp()}.json`,
+      JSON.stringify(
+        buildSystemCheckPayload(
+          "install-repair",
+          diagnostics,
+          ["aptPolicy", "dpkgAudit", "aptHolds", "aptSources", "aptLogs", "storage"],
+          {
+            beforeAudit: beforeAudit.stdout || beforeAudit.stderr,
+            repairOutput: commandResult.stdout || commandResult.stderr,
+            afterAudit: afterAudit.stdout || afterAudit.stderr,
+            policyStatus: policyStatus.stdout || policyStatus.stderr,
+            storageStatus: storageStatus.stdout || storageStatus.stderr
+          }
+        ),
+        null,
+        2
+      )
+    );
+
+    const result = {
+      ...base,
+      ok: commandResult.ok && !unresolved,
+      state: commandResult.ok && !unresolved ? "completed" : "failed",
+      summary:
+        commandResult.ok && !unresolved
+          ? "Package state repaired"
+          : "Failed to fully repair package state",
+      artifact: {
+        path: reportPath,
+        type: "application/json"
+      },
+      commandResult,
+      beforeAudit,
+      afterAudit,
+      policyStatus,
+      storageStatus,
+      followUp:
+        commandResult.ok && !unresolved
+          ? [
+              "dpkg 当前没有继续报未完成状态，可以回到目标软件安装流程继续验证。",
+              "如果仍然安装失败，再看具体软件源、网络和磁盘空间。"
+            ]
+          : [
+              "先看修复日志、dpkg 输出和软件源状态，确认问题落在依赖、空间还是第三方仓库。",
+              "如果根分区空间已经很紧张，先清理空间，再继续安装。"
+            ]
+    };
+
+    result.logArtifact = {
+      path: await writeActionLog(result),
+      type: "application/json"
+    };
+
+    return result;
+  }
+
   if (actionId === "repair-print-stack") {
     if (!authorization.canRunFromApi) {
       const manualExecution = await createManualExecutionPlan(
@@ -5113,6 +6183,10 @@ async function collectDiagnostics() {
     osReleaseResult,
     kernelResult,
     networkResult,
+    networkManagerResult,
+    networkRouteResult,
+    networkDnsResult,
+    networkLogsResult,
     memoryResult,
     storageResult,
     cupsActiveResult,
@@ -5121,11 +6195,26 @@ async function collectDiagnostics() {
     lpstatResult,
     lpinfoResult,
     lsusbResult,
-    cupLogsResult
+    cupLogsResult,
+    audioStatusResult,
+    audioServicesResult,
+    audioInfoResult,
+    audioSinksResult,
+    audioSourcesResult,
+    audioLogsResult,
+    aptPolicyResult,
+    dpkgAuditResult,
+    aptHoldsResult,
+    aptSourcesResult,
+    aptLogsResult
   ] = await Promise.all([
     runShell(COMMANDS.osRelease),
     runShell(COMMANDS.kernel),
     runShell(COMMANDS.network),
+    runShell(COMMANDS.networkManager),
+    runShell(COMMANDS.networkRoute),
+    runShell(COMMANDS.networkDns),
+    runShell(COMMANDS.networkLogs, 9000),
     runShell(COMMANDS.memory),
     runShell(COMMANDS.storage),
     runShell(COMMANDS.cupsActive),
@@ -5134,7 +6223,18 @@ async function collectDiagnostics() {
     runShell(COMMANDS.lpstat),
     runShell(COMMANDS.lpinfo),
     runShell(COMMANDS.lsusb),
-    runShell(COMMANDS.cupLogs, 9000)
+    runShell(COMMANDS.cupLogs, 9000),
+    runShell(COMMANDS.audioStatus, 7000),
+    runShell(COMMANDS.audioServices, 7000),
+    runShell(COMMANDS.audioInfo, 7000),
+    runShell(COMMANDS.audioSinks, 7000),
+    runShell(COMMANDS.audioSources, 7000),
+    runShell(COMMANDS.audioLogs, 9000),
+    runShell(COMMANDS.aptPolicy, 7000),
+    runShell(COMMANDS.dpkgAudit, 7000),
+    runShell(COMMANDS.aptHolds, 7000),
+    runShell(COMMANDS.aptSources, 7000),
+    runShell(COMMANDS.aptLogs, 9000)
   ]);
 
   const system = parseOsRelease(osReleaseResult.stdout, kernelResult.stdout);
@@ -5143,6 +6243,10 @@ async function collectDiagnostics() {
   const usb = parseUsb(lsusbResult.stdout);
   const logs = parseLogs(cupLogsResult.stdout || cupLogsResult.stderr);
   const network = parseNetwork(networkResult.stdout);
+  const networkManager = splitLines(networkManagerResult.stdout || networkManagerResult.stderr);
+  const networkRoute = splitLines(networkRouteResult.stdout || networkRouteResult.stderr);
+  const networkDns = parseResolvectl(networkDnsResult.stdout || networkDnsResult.stderr);
+  const networkLogLines = splitLines(networkLogsResult.stdout || networkLogsResult.stderr);
   const memory = parseMemory(memoryResult.stdout);
   const storage = parseStorage(storageResult.stdout);
   const failedUnits = parseFailedUnits(failedUnitsResult.stdout || failedUnitsResult.stderr);
@@ -5150,6 +6254,20 @@ async function collectDiagnostics() {
   const connection = lpinfo.connectionGuess;
   const printerDetected = Boolean(device) || lpstat.printers.length > 0;
   const symptom = detectSymptom(lpstat, logs, printerDetected);
+  const audio = parseAudioState(
+    audioStatusResult.stdout || audioStatusResult.stderr,
+    audioInfoResult.stdout || audioInfoResult.stderr,
+    audioSinksResult.stdout || audioSinksResult.stderr,
+    audioSourcesResult.stdout || audioSourcesResult.stderr,
+    audioLogsResult.stdout || audioLogsResult.stderr
+  );
+  const packageManager = parsePackageManagerState(
+    aptPolicyResult.stdout || aptPolicyResult.stderr,
+    dpkgAuditResult.stdout || dpkgAuditResult.stderr,
+    aptHoldsResult.stdout || aptHoldsResult.stderr,
+    aptSourcesResult.stdout || aptSourcesResult.stderr,
+    aptLogsResult.stdout || aptLogsResult.stderr
+  );
   const diagnostics = {
     timestamp: new Date().toISOString(),
     host: {
@@ -5185,6 +6303,22 @@ async function collectDiagnostics() {
           ? `${lpstat.printers.length} queue(s) detected`
           : "No configured print queue found"
     },
+    network: {
+      ...network,
+      managerLines: networkManager,
+      routeLines: networkRoute,
+      dnsLines: networkDns.dnsLines,
+      dnsSummary: networkDns.summary,
+      logLines: networkLogLines,
+      needsAttention:
+        !network.online || networkManager.some((line) => /disconnected|unavailable|failed/i.test(line)) || networkDns.dnsLines.length === 0,
+      summary:
+        network.online
+          ? network.summary
+          : "No active non-loopback interface"
+    },
+    audio,
+    packageManager,
     usb: {
       deviceCount: usb.deviceCount,
       brotherDevices: usb.brotherDevices.slice(0, 4),
@@ -5209,10 +6343,14 @@ async function collectDiagnostics() {
               ? "系统侧尚未稳定识别设备，优先收敛链路和枚举。"
               : "优先检查纸宽、页面大小和标签模板参数。"
     },
-    recommendations: buildRecommendations(symptom),
+    recommendations: [],
     commands: [
       commandPreview("osRelease", osReleaseResult),
       commandPreview("network", networkResult),
+      commandPreview("networkManager", networkManagerResult),
+      commandPreview("networkRoute", networkRouteResult),
+      commandPreview("networkDns", networkDnsResult),
+      commandPreview("networkLogs", networkLogsResult),
       commandPreview("memory", memoryResult),
       commandPreview("storage", storageResult),
       commandPreview("cupsActive", cupsActiveResult),
@@ -5220,10 +6358,22 @@ async function collectDiagnostics() {
       commandPreview("lpstat", lpstatResult),
       commandPreview("lpinfo", lpinfoResult),
       commandPreview("lsusb", lsusbResult),
-      commandPreview("cupLogs", cupLogsResult)
+      commandPreview("cupLogs", cupLogsResult),
+      commandPreview("audioStatus", audioStatusResult),
+      commandPreview("audioServices", audioServicesResult),
+      commandPreview("audioInfo", audioInfoResult),
+      commandPreview("audioSinks", audioSinksResult),
+      commandPreview("audioSources", audioSourcesResult),
+      commandPreview("audioLogs", audioLogsResult),
+      commandPreview("aptPolicy", aptPolicyResult),
+      commandPreview("dpkgAudit", dpkgAuditResult),
+      commandPreview("aptHolds", aptHoldsResult),
+      commandPreview("aptSources", aptSourcesResult),
+      commandPreview("aptLogs", aptLogsResult)
     ]
   };
 
+  diagnostics.recommendations = buildRecommendations(diagnostics);
   diagnostics.solutionPlan = buildIntelligentPlan(diagnostics);
   return diagnostics;
 }

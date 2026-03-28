@@ -350,7 +350,7 @@ const distroProfiles = {
   },
   "deepin 23.1": {
     commandFamily: "apt + systemd + CUPS",
-    note: "适合作为本机诊断和原型调试环境。"
+    note: "适合作为本机诊断和功能联调环境。"
   },
   "UOS 1070": {
     commandFamily: "apt + enterprise desktop stack",
@@ -853,6 +853,134 @@ const PRINT_REPAIR_CHAIN = [
     cta: "查看并修复权限"
   }
 ];
+
+const COMMON_ISSUE_CARDS = [
+  {
+    id: "network",
+    title: "网络",
+    subtitle: "先看连通性、DNS 和代理",
+    summary: "适合网页打不开、更新失败、软件源超时这类问题。",
+    detail:
+      "先把网络链路看清楚，再判断是 Wi-Fi、网关、DNS 还是代理配置。这个入口会优先带出连通性和地址信息，避免一上来就改系统。",
+    prompt:
+      "我现在遇到网络问题，网页打不开或更新失败。请先帮我看连通性、DNS 和代理，再给出排查顺序。",
+    commands: ["ip -brief address", "resolvectl status", "ping -c 3 223.5.5.5"],
+    accent: "#73f5ff",
+    tone: "stable"
+  },
+  {
+    id: "audio",
+    title: "音频",
+    subtitle: "先看输出设备、音量和 PipeWire",
+    summary: "适合没声音、麦克风没反应、输出设备切换失败这类问题。",
+    detail:
+      "先确认系统有没有识别到默认声卡，再看音量、静音状态和音频服务。很多问题不在驱动，先把默认输出和会话状态看一遍更快。",
+    prompt:
+      "我现在遇到音频问题，扬声器没声音或者麦克风不工作。请先检查输出设备、音量和 PipeWire 状态，再给出修复建议。",
+    commands: ["pactl info", "pactl list short sinks", "systemctl --user status pipewire"],
+    accent: "#ffb55e",
+    tone: "warning"
+  },
+  {
+    id: "install",
+    title: "安装",
+    subtitle: "先看软件源、包管理和依赖",
+    summary: "适合软件装不上、依赖断裂、更新报错这类问题。",
+    detail:
+      "先确认软件源能不能用、包管理器有没有报错、依赖是不是缺了一截。这个入口会优先给出安装和修复包的具体步骤。",
+    prompt:
+      "我现在遇到安装问题，软件装不上或者依赖报错。请先检查软件源、包管理和依赖，再给出处理顺序。",
+    commands: ["apt update", "apt policy", "dpkg --audit"],
+    accent: "#9ef8d8",
+    tone: "critical"
+  }
+];
+
+function inferCommonIssueFocus(draft, snapshot, probe) {
+  const text = `${draft || ""} ${snapshot?.symptom || ""} ${snapshot?.connection || ""} ${
+    probe?.data?.solutionPlan?.headline || ""
+  } ${probe?.data?.solutionPlan?.route || ""}`.toLowerCase();
+
+  const hasAny = (keywords) => keywords.some((keyword) => text.includes(keyword));
+
+  if (
+    hasAny([
+      "网络",
+      "wifi",
+      "wi-fi",
+      "dns",
+      "代理",
+      "连不上",
+      "更新失败",
+      "网页打不开",
+      "internet"
+    ])
+  ) {
+    return {
+      id: "network",
+      reason: "当前输入里更像网络连通性问题，先看地址、DNS 和代理。"
+    };
+  }
+
+  if (
+    hasAny([
+      "音频",
+      "声音",
+      "没声音",
+      "麦克风",
+      "扬声器",
+      "耳机",
+      "pipewire",
+      "pulseaudio",
+      "alsa"
+    ])
+  ) {
+    return {
+      id: "audio",
+      reason: "当前输入里更像音频问题，先看输出设备和音频服务。"
+    };
+  }
+
+  if (
+    hasAny([
+      "安装",
+      "软件包",
+      "依赖",
+      "更新",
+      "apt",
+      "deb",
+      "flatpak",
+      "snap",
+      "仓库",
+      "软件源",
+      "微信"
+    ])
+  ) {
+    return {
+      id: "install",
+      reason: "当前输入里更像安装和依赖问题，先看软件源和包管理。"
+    };
+  }
+
+  if (snapshot?.symptom === "驱动 / 过滤链异常") {
+    return {
+      id: "install",
+      reason: "当前场景更像驱动和依赖链异常，先从安装和包状态切入。"
+    };
+  }
+
+  if (snapshot?.connection === "Network") {
+    return {
+      id: "network",
+      reason: "当前连接方式是网络设备，先把链路和地址看清楚。"
+    };
+  }
+
+  return {
+    id: "install",
+    reason: "当前场景还没有明确指向网络或音频，先从安装和依赖看起。"
+  };
+}
 
 function agentScenarioLabel(scenario) {
   return AGENT_SCENARIO_LABELS[scenario] || AGENT_SCENARIO_LABELS["email-assistant"];
@@ -2025,6 +2153,96 @@ function PrintRepairChainPanel({
       <div className="print-repair-chain__footer">
         <span className="tag-pill">推荐顺序：删除旧队列 / 重装关键驱动包 / 修复过滤链权限</span>
         <span className="tag-pill">后续动作：测试打印 / 回归检查 / 必要时重建队列</span>
+      </div>
+    </section>
+  );
+}
+
+function CommonIssuePanel({
+  draft,
+  snapshot,
+  probe,
+  onPickIssue,
+  onRunIssue
+}) {
+  const focus = inferCommonIssueFocus(draft, snapshot, probe);
+  const routeLabel = probe.data?.solutionPlan
+    ? solutionRouteLabel(probe.data.solutionPlan.route)
+    : "等待诊断";
+
+  return (
+    <section className="common-issues">
+      <div className="common-issues__head">
+        <div>
+          <p className="eyebrow">常见场景</p>
+          <h3>常见问题处理</h3>
+          <p className="common-issues__lede">
+            直接从常见场景切入。先把网络、音频和安装这三类问题放在前面，适合快速判断，也方便接着往下做。
+          </p>
+        </div>
+
+        <div className="tag-row">
+          <span className="tag-pill">{snapshot.distro}</span>
+          <span className="tag-pill">{snapshot.device}</span>
+          <span className="tag-pill">{routeLabel}</span>
+        </div>
+      </div>
+
+      <div className="common-issues__banner">
+        <strong>{COMMON_ISSUE_CARDS.find((item) => item.id === focus.id)?.title || "安装"}</strong>
+        <span>{focus.reason}</span>
+      </div>
+
+      <div className="common-issues__grid">
+        {COMMON_ISSUE_CARDS.map((item) => {
+          const isActive = item.id === focus.id;
+
+          return (
+            <article
+              key={item.id}
+              className={`common-issue-card ${isActive ? "is-active" : ""}`}
+              style={{ "--issue-accent": item.accent }}
+            >
+              <div className="common-issue-card__head">
+                <div>
+                  <span>{item.subtitle}</span>
+                  <strong>{item.title}</strong>
+                </div>
+                <span className={`tone-pill is-${item.tone}`}>
+                  {isActive ? "当前建议" : "可切换"}
+                </span>
+              </div>
+
+              <p className="common-issue-card__summary">{item.summary}</p>
+              <p className="common-issue-card__detail">{item.detail}</p>
+
+              <div className="tag-row common-issue-card__tags">
+                {item.commands.map((command) => (
+                  <span key={command} className="tag-pill">
+                    {command}
+                  </span>
+                ))}
+              </div>
+
+              <div className="common-issue-card__actions">
+                <button
+                  type="button"
+                  className="copy-button"
+                  onClick={() => onPickIssue(item)}
+                >
+                  带入问题
+                </button>
+                <button
+                  type="button"
+                  className="action-run"
+                  onClick={() => onRunIssue(item)}
+                >
+                  直接分析
+                </button>
+              </div>
+            </article>
+          );
+        })}
       </div>
     </section>
   );
@@ -3395,6 +3613,16 @@ export default function App() {
     setFocusedModuleId(moduleId);
   }
 
+  function handleCommonIssuePick(issue) {
+    switchModule("general");
+    setDraft(issue.prompt);
+  }
+
+  function handleCommonIssueRun(issue) {
+    switchModule("general");
+    submitQuestion(issue.prompt);
+  }
+
   async function loadActions() {
     try {
       const payload = await fetchJson(`${API_BASE}/api/actions`);
@@ -4075,13 +4303,13 @@ export default function App() {
     <div className="app-shell" style={sceneStyle}>
       <header className="topbar">
         <div>
-          <p className="eyebrow">Future support console for deepin / UOS</p>
+          <p className="eyebrow">deepin / UOS 系统助手</p>
           <h1>Orbit Deepin Assistant</h1>
         </div>
 
         <div className="topbar__status">
-          <span>Scene: {sceneModule.label}</span>
-          <strong>Focused on system recovery, printers, driver repair</strong>
+          <span>当前场景：{sceneModule.label}</span>
+          <strong>围绕系统恢复、外设连接和驱动修复展开</strong>
         </div>
       </header>
 
@@ -4089,7 +4317,7 @@ export default function App() {
         <section className="scene-panel">
           <div className="scene-panel__header">
             <div>
-              <p className="eyebrow">Immersive operations map</p>
+              <p className="eyebrow">场景联动</p>
               <h2>未来科技感场景 + 模块联动</h2>
             </div>
 
@@ -4178,11 +4406,11 @@ export default function App() {
         <section className="console-panel">
           <div className="console-panel__header">
             <div>
-              <p className="eyebrow">Perception Q&A</p>
+              <p className="eyebrow">问题分析与执行</p>
               <h2>系统感知问答与排障控制台</h2>
             </div>
 
-            <div className="console-panel__badge">MVP front-end prototype</div>
+            <div className="console-panel__badge">本地运行版本</div>
           </div>
 
           <div className="snapshot-grid">
@@ -4208,6 +4436,13 @@ export default function App() {
             ))}
           </div>
 
+          <CommonIssuePanel
+            draft={draft}
+            snapshot={snapshot}
+            probe={probe}
+            onPickIssue={handleCommonIssuePick}
+            onRunIssue={handleCommonIssueRun}
+          />
           <PrintRepairChainPanel
             actions={actionCatalog}
             probe={probe}
