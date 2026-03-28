@@ -795,6 +795,523 @@ function findAttachmentPathByLabel(attachments, label) {
   );
 }
 
+function findActionById(actions, actionId, fallbackId = "") {
+  return (
+    actions.find((action) => action.id === actionId) ||
+    (fallbackId ? actions.find((action) => action.id === fallbackId) : null)
+  );
+}
+
+const AGENT_SCENARIO_LABELS = {
+  "email-assistant": "智能邮件助手",
+  "system-repair": "系统问题诊断与修复"
+};
+
+const AGENT_SCENARIO_DEFAULT_INPUTS = {
+  "email-assistant": "请帮我整理一封更自然的进阶报名邮件。",
+  "system-repair": "请帮我看一下系统问题，先给出诊断和修复建议。"
+};
+
+const PRINT_REPAIR_CHAIN = [
+  {
+    id: "reset-print-queues",
+    actionId: "reset-print-queues",
+    step: "步骤 01",
+    title: "删除旧队列",
+    summary: "先清空残留队列、旧作业和暂停状态，避免旧配置拖住新修复流程。",
+    detail:
+      "适合队列卡住、任务堆积、换驱动后还残留旧配置的情况。先做这一步，后面的驱动重装和权限检查才不会被旧状态干扰。",
+    note: "会直接指向现有的队列清理动作。",
+    accent: "#6dffb7",
+    tone: "warning",
+    cta: "清理旧队列"
+  },
+  {
+    id: "repair-print-stack",
+    actionId: "repair-print-stack",
+    step: "步骤 02",
+    title: "重装关键驱动包",
+    summary: "重装 `cups`、`printer-driver-all` 等核心打印组件，先把基础栈补齐。",
+    detail:
+      "适合驱动包损坏、依赖断裂、系统更新后打印组件不一致的情况。这个动作会走现有的打印栈重装流程，并在完成后重启 CUPS。",
+    note: "如果软件源或依赖链有问题，这一步会先把底层修复回可用状态。",
+    accent: "#ffb55e",
+    tone: "critical",
+    cta: "重装打印栈"
+  },
+  {
+    id: "repair-cups-permissions",
+    actionId: "repair-print-stack",
+    step: "步骤 03",
+    title: "修复 CUPS 过滤链权限",
+    summary: "检查 `/usr/lib/cups/filter` 和 `backend` 的执行位与访问权限。",
+    detail:
+      "如果 `cupsd` 正常但依旧报 `filter failed`、`backend` 找不到或权限异常，这一步就把问题聚焦到过滤链和执行权限，而不是盲目重装更多软件。",
+    note: "这条说明仍然落在现有 `repair-print-stack` 动作上，但强调的是过滤链和权限分支。",
+    accent: "#73f5ff",
+    tone: "stable",
+    cta: "查看并修复权限"
+  }
+];
+
+function agentScenarioLabel(scenario) {
+  return AGENT_SCENARIO_LABELS[scenario] || AGENT_SCENARIO_LABELS["email-assistant"];
+}
+
+function agentScenarioDefaultInput(scenario) {
+  return (
+    AGENT_SCENARIO_DEFAULT_INPUTS[scenario] ||
+    AGENT_SCENARIO_DEFAULT_INPUTS["email-assistant"]
+  );
+}
+
+function safeText(value, fallback = "未提供") {
+  const text = typeof value === "string" ? value.trim() : String(value || "").trim();
+  return text || fallback;
+}
+
+function previewText(value, limit = 96, fallback = "未提供") {
+  const text = safeText(value, fallback);
+
+  if (text === fallback) {
+    return fallback;
+  }
+
+  return text.length > limit ? `${text.slice(0, limit)}…` : text;
+}
+
+function stringifyAgentItem(item) {
+  if (typeof item === "string" || typeof item === "number") {
+    return safeText(item, "");
+  }
+
+  if (!item || typeof item !== "object") {
+    return "";
+  }
+
+  if ("name" in item && "ok" in item) {
+    const label = safeText(item.name, "检查项");
+    const note = safeText(item.note, "");
+    const status = item.ok ? "通过" : "需复核";
+
+    return note ? `${status} · ${label}：${note}` : `${status} · ${label}`;
+  }
+
+  if ("name" in item && "value" in item) {
+    return `${safeText(item.name, "信号")}：${safeText(item.value, "未提供")}`;
+  }
+
+  if ("command" in item) {
+    return safeText(item.command, "");
+  }
+
+  return Object.values(item)
+    .filter(
+      (value) => typeof value === "string" || typeof value === "number"
+    )
+    .map((value) => safeText(value, ""))
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function uniqueItems(items) {
+  return [...new Set(items.filter(Boolean))];
+}
+
+function toList(value) {
+  if (Array.isArray(value)) {
+    return uniqueItems(value.map((item) => stringifyAgentItem(item)).filter(Boolean));
+  }
+
+  const text = stringifyAgentItem(value);
+
+  return text ? [text] : [];
+}
+
+function normalizeConfidence(value, fallback = 80) {
+  const numeric = Number(value);
+
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+
+  return numeric <= 1 ? Math.round(numeric * 100) : Math.round(numeric);
+}
+
+function humanizeStatusLabel(value, fallback = "Ready") {
+  const text = safeText(value, "");
+
+  if (!text) {
+    return fallback;
+  }
+
+  return text
+    .split("_")
+    .map((item) => (item ? `${item[0].toUpperCase()}${item.slice(1)}` : ""))
+    .join(" ");
+}
+
+function normalizeAgentContextPayload(payload, fallback) {
+  const source = safeText(
+    payload?.source ||
+      (payload?.window || payload?.session || payload?.clipboard
+        ? "backend"
+        : ""),
+    fallback.source || "local"
+  );
+  const collectedAt = safeText(
+    payload?.collectedAt || payload?.timestamp,
+    fallback.collectedAt || new Date().toISOString()
+  );
+  const system = payload?.system || fallback.system;
+  const signals = toList(payload?.signals);
+  const notes = uniqueItems([
+    ...toList(payload?.notes),
+    payload?.summary ? `上下文摘要：${safeText(payload.summary, "")}` : ""
+  ]);
+
+  return {
+    source,
+    collectedAt,
+    scenario: safeText(payload?.scenario || payload?.scene, fallback.scenario),
+    windowTitle: safeText(
+      payload?.windowTitle || payload?.window?.title,
+      fallback.windowTitle
+    ),
+    appName: safeText(
+      payload?.appName || payload?.window?.appName || payload?.window?.className,
+      fallback.appName
+    ),
+    clipboardPreview: safeText(
+      payload?.clipboardPreview || payload?.clipboard?.preview,
+      fallback.clipboardPreview
+    ),
+    sessionType: safeText(
+      payload?.sessionType || payload?.session?.type,
+      fallback.sessionType
+    ),
+    prompt: safeText(payload?.prompt, fallback.prompt),
+    system: {
+      distro: safeText(system?.distro, fallback.system.distro),
+      device: safeText(system?.device, fallback.system.device),
+      connection: safeText(system?.connection, fallback.system.connection),
+      symptom: safeText(system?.symptom, fallback.system.symptom),
+      summary: safeText(system?.summary, fallback.system.summary),
+      host: safeText(payload?.host?.hostname || system?.host, fallback.system.host)
+    },
+    signals: signals.length ? signals : fallback.signals,
+    notes: notes.length ? notes : fallback.notes
+  };
+}
+
+function normalizeAgentResult(payload, fallbackContext) {
+  if (!payload) {
+    return null;
+  }
+
+  const scenario = safeText(payload.scenario || payload.scene, fallbackContext.scenario);
+  const scenarioLabel = safeText(
+    payload.scenarioLabel,
+    agentScenarioLabel(scenario)
+  );
+  const collectorEvidence = uniqueItems([
+    ...toList(payload.collector?.evidence),
+    ...toList(payload.collector?.sources),
+    ...toList(payload.collector?.signals)
+  ]);
+  const operatorSteps = uniqueItems([
+    ...toList(payload.operator?.steps),
+    ...toList(payload.operator?.plan),
+    ...toList(payload.operator?.questions),
+    ...toList(payload.operator?.commandsPreview),
+    ...toList(payload.operator?.safety)
+  ]);
+  const writerNotes = uniqueItems([
+    ...toList(payload.writer?.notes),
+    ...(toList(payload.writer?.recipients).length
+      ? [`收件人线索：${toList(payload.writer?.recipients).join("，")}`]
+      : []),
+    ...toList(payload.writer?.commands)
+  ]);
+  const verifierChecks = uniqueItems([
+    ...toList(payload.verifier?.checks),
+    ...toList(payload.verifier?.notes)
+  ]);
+
+  return {
+    scenario,
+    scenarioLabel,
+    source: safeText(
+      payload.source || (payload.context ? "backend" : ""),
+      fallbackContext.source
+    ),
+    collectedAt: safeText(
+      payload.collectedAt || payload.createdAt || payload.context?.timestamp,
+      fallbackContext.collectedAt
+    ),
+    collector: {
+      title: safeText(
+        payload.collector?.title,
+        "Collector / Context Collector"
+      ),
+      summary: safeText(
+        payload.collector?.summary,
+        "已完成上下文采集。"
+      ),
+      evidence: collectorEvidence
+    },
+    operator: {
+      title: safeText(
+        payload.operator?.title,
+        "Operator / System Operator"
+      ),
+      summary: safeText(
+        payload.operator?.summary ||
+          (payload.operator?.topic
+            ? `已收敛到“${payload.operator.topic}”处理路线。`
+            : ""),
+        "已完成任务路由和步骤编排。"
+      ),
+      steps: operatorSteps
+    },
+    writer: {
+      title: safeText(
+        payload.writer?.title,
+        "Writer / Communicator"
+      ),
+      summary: safeText(
+        payload.writer?.summary || (payload.writer?.brief ? "已整理出一版执行摘要。" : ""),
+        "已生成面向用户的输出。"
+      ),
+      draftTitle: safeText(
+        payload.writer?.draftTitle || payload.writer?.subject,
+        ""
+      ),
+      draftBody: safeText(
+        payload.writer?.draftBody || payload.writer?.body || payload.writer?.brief,
+        ""
+      ),
+      notes: writerNotes
+    },
+    verifier: {
+      title: safeText(
+        payload.verifier?.title,
+        "Verifier"
+      ),
+      summary: safeText(
+        payload.verifier?.summary,
+        "已完成结果校验。"
+      ),
+      checks: verifierChecks
+    },
+    outcome: {
+      label: humanizeStatusLabel(payload.outcome?.label || payload.outcome?.status),
+      summary: safeText(
+        payload.outcome?.summary,
+        "已生成可继续执行的协作结果。"
+      ),
+      nextStep: safeText(
+        payload.outcome?.nextStep || payload.outcome?.nextAction,
+        "继续下一轮确认或执行。"
+      ),
+      confidence: normalizeConfidence(payload.outcome?.confidence),
+      tone: safeText(
+        payload.outcome?.tone,
+        payload.outcome?.status === "needs_more_info" ? "warning" : "stable"
+      )
+    }
+  };
+}
+
+function buildFallbackAgentContext({
+  scenario,
+  input,
+  clipboardText,
+  snapshot,
+  probeData,
+  actionEnvironment,
+  activeModule
+}) {
+  const windowTitle =
+    typeof document !== "undefined" ? document.title : "Orbit Deepin Assistant";
+  const source = "local";
+  const systemSummary = probeData?.system
+    ? `${safeText(probeData.system.prettyName, snapshot.distro)} / ${safeText(
+        probeData.system.kernel,
+        "unknown-kernel"
+      )}`
+    : `${snapshot.distro} / ${snapshot.device} / ${snapshot.connection}`;
+  const queueSummary = probeData?.printers?.summary || snapshot.symptom;
+  const clipboardPreview = previewText(
+    clipboardText || input || "",
+    96,
+    "未读取剪贴板"
+  );
+
+  return {
+    source,
+    collectedAt: new Date().toISOString(),
+    scenario,
+    windowTitle,
+    appName: safeText(activeModule?.title, "Orbit Deepin Assistant"),
+    clipboardPreview,
+    sessionType: safeText(actionEnvironment?.sessionType, "browser"),
+    prompt: safeText(input, ""),
+    system: {
+      distro: snapshot.distro,
+      device: snapshot.device,
+      connection: snapshot.connection,
+      symptom: snapshot.symptom,
+      summary: systemSummary,
+      host: safeText(probeData?.host?.hostname, "local-host")
+    },
+    signals: [
+      `当前场景：${agentScenarioLabel(scenario)}`,
+      `系统快照：${snapshot.distro} / ${snapshot.device} / ${snapshot.connection}`,
+      `队列状态：${queueSummary || "未读取"}`
+    ],
+    notes: [
+      "当前上下文由前端本地快照与实时诊断结果拼接而成。",
+      "如果后端 context/live 暂时不可用，这里会自动回退到前端快照。"
+    ]
+  };
+}
+
+function buildFallbackAgentResult({
+  scenario,
+  input,
+  context
+}) {
+  const scenarioLabel = agentScenarioLabel(scenario);
+  const prompt = safeText(input, "");
+  const collectorEvidence = [
+    `窗口：${context.windowTitle}`,
+    `剪贴板：${context.clipboardPreview}`,
+    `系统：${context.system.summary}`
+  ];
+
+  if (scenario === "system-repair") {
+    return {
+      scenario,
+      scenarioLabel,
+      source: "local",
+      collectedAt: context.collectedAt,
+      collector: {
+        title: "Collector / Context Collector",
+        summary: "已采集系统快照、会话信息和当前问题描述。",
+        evidence: collectorEvidence
+      },
+      operator: {
+        title: "Operator / System Operator",
+        summary: "问题更像桌面系统修复任务，先收敛到服务、设备和队列三层。",
+        steps: [
+          "先确认当前系统版本、会话类型和关键服务状态。",
+          "再看设备枚举、日志和队列状态，避免直接重装。",
+          "确认风险后，再执行修复动作并做一次回读验证。"
+        ]
+      },
+      writer: {
+        title: "Writer / Communicator",
+        summary: "整理成可执行的修复摘要，方便继续确认。",
+        draftTitle: `系统问题诊断摘要：${context.system.symptom}`,
+        draftBody: [
+          "当前判断更偏向系统问题诊断，而不是直接重装。",
+          "",
+          `问题描述：${prompt || context.system.symptom}`,
+          `系统快照：${context.system.summary}`,
+          "",
+          "建议顺序：",
+          "1. 检查服务状态",
+          "2. 检查设备枚举和日志",
+          "3. 再决定是否执行修复动作",
+          "",
+          "如果需要，我可以继续把这一步拆成更细的执行建议。"
+        ].join("\n"),
+        notes: [
+          "这一步先保留确认，不直接下发高风险动作。",
+          "如果后端 agent-teams/run 暂时不可用，这里会自动回退到本地演示结果。"
+        ]
+      },
+      verifier: {
+        title: "Verifier",
+        summary: "确认结果还处在诊断阶段，尚未执行系统修改。",
+        checks: [
+          "服务是否在线",
+          "设备是否枚举",
+          "日志是否出现新的错误",
+          "是否保留人工确认"
+        ]
+      },
+      outcome: {
+        label: "Ready for repair",
+        summary: "已生成系统修复方向的草稿，可以继续确认执行范围。",
+        nextStep: "先预览修复动作，再决定是否执行。",
+        confidence: 84,
+        tone: "warning"
+      }
+    };
+  }
+
+  return {
+    scenario,
+    scenarioLabel,
+    source: "local",
+    collectedAt: context.collectedAt,
+    collector: {
+      title: "Collector / Context Collector",
+      summary: "已读取当前窗口、剪贴板和文档上下文。",
+      evidence: collectorEvidence
+    },
+    operator: {
+      title: "Operator / System Operator",
+      summary: "判断当前更像邮件整理任务，先组织收件对象和语气。",
+      steps: [
+        "先确认邮件主题是否明确。",
+        "结合当前上下文提炼收件对象和正文重点。",
+        "保留人工确认后，再发送或导出。"
+      ]
+    },
+    writer: {
+      title: "Writer / Communicator",
+      summary: "已整理出可编辑的邮件草稿。",
+      draftTitle: "关于 deepin Agent Teams 第一阶段设计文档的说明",
+      draftBody: [
+        "您好，",
+        "",
+        `我这边整理了一版项目说明，当前关注点是：${prompt || "根据当前上下文整理邮件"}`,
+        "",
+        `系统上下文：${context.system.summary}`,
+        `剪贴板摘要：${context.clipboardPreview}`,
+        "",
+        "如果需要，我可以继续把正文压得更短，或者补上更正式的版本。",
+        "",
+        "谢谢。"
+      ].join("\n"),
+      notes: [
+        "邮件内容已按当前上下文组织。",
+        "发送前还可以继续人工修改。"
+      ]
+    },
+    verifier: {
+      title: "Verifier",
+      summary: "确认草稿结构完整，发送前保留人工确认。",
+      checks: [
+        "主题是否准确",
+        "收件人是否正确",
+        "正文是否自然",
+        "附件是否齐全"
+      ]
+    },
+    outcome: {
+      label: "Ready to send",
+      summary: "邮件草稿已经整理好，可以继续确认收件人后发送。",
+      nextStep: "确认收件人和附件后再发。",
+      confidence: 88,
+      tone: "stable"
+    }
+  };
+}
+
 function manualExecutionTone(status) {
   if (status === "completed") {
     return "stable";
@@ -1039,7 +1556,7 @@ function LiveProbePanel({ probe, onRefresh }) {
             <div className="probe-plan">
               <div className="probe-plan__head">
                 <div>
-                  <span>智能方案引擎</span>
+                  <span>当前处理建议</span>
                   <strong>{probe.data.solutionPlan.headline}</strong>
                 </div>
                 <span className="tone-pill is-warning">
@@ -1108,6 +1625,407 @@ function LiveProbePanel({ probe, onRefresh }) {
           `os-release`、`lpstat`、`lpinfo`、`lsusb` 和 CUPS 日志。
         </p>
       )}
+    </section>
+  );
+}
+
+function AgentRoleCard({ role, title, summary, items, body, tone }) {
+  return (
+    <article className="agent-role-card">
+      <div className="agent-role-card__head">
+        <div>
+          <span>{role}</span>
+          <strong>{title}</strong>
+        </div>
+        <span className={`tone-pill is-${tone}`}>{role}</span>
+      </div>
+
+      <p className="agent-role-card__summary">{summary}</p>
+
+      {items?.length ? (
+        <ul className="agent-role-card__list">
+          {items.map((item) => (
+            <li key={item}>{item}</li>
+          ))}
+        </ul>
+      ) : null}
+
+      {body ? <pre className="agent-role-card__code">{body}</pre> : null}
+    </article>
+  );
+}
+
+function AgentTeamsPanel({
+  contextState,
+  scenario,
+  input,
+  clipboardText,
+  resultState,
+  onScenarioChange,
+  onInputChange,
+  onRefreshContext,
+  onReadClipboard,
+  onRunTeams
+}) {
+  const contextTone =
+    contextState.status === "loading"
+      ? "warning"
+      : contextState.status === "fallback"
+        ? "warning"
+        : "stable";
+  const resultTone =
+    resultState.status === "loading"
+      ? "warning"
+      : resultState.status === "fallback"
+        ? "warning"
+        : resultState.status === "error"
+          ? "critical"
+          : "stable";
+
+  return (
+    <section className="agent-teams">
+      <div className="agent-teams__head">
+        <div>
+          <p className="eyebrow">Agent Teams</p>
+          <h3>协作分工</h3>
+          <p className="agent-teams__lede">
+            这里把实时上下文、任务输入和四个角色的分工整理成一条清楚的处理链。
+          </p>
+        </div>
+
+        <div className="tag-row">
+          <span className="tag-pill">context/live</span>
+          <span className="tag-pill">agent-teams/run</span>
+          <button type="button" className="copy-button" onClick={onRefreshContext}>
+            {contextState.status === "loading" ? "刷新中..." : "刷新上下文"}
+          </button>
+        </div>
+      </div>
+
+      {contextState.error ? <p className="probe-error">{contextState.error}</p> : null}
+      {resultState.error ? <p className="probe-error">{resultState.error}</p> : null}
+
+      <div className="agent-teams__grid">
+        <article className="agent-teams__card">
+          <div className="agent-teams__card-head">
+            <div>
+              <span>实时上下文采集</span>
+              <strong>
+                {safeText(
+                  contextState.data?.scenarioLabel || agentScenarioLabel(scenario),
+                  "未选择场景"
+                )}
+              </strong>
+            </div>
+            <span className={`tone-pill is-${contextTone}`}>
+              {safeText(contextState.data?.source, "local")}
+            </span>
+          </div>
+
+          <p className="agent-teams__meta">
+            {contextState.data
+              ? `采集于 ${formatProbeTime(contextState.data.collectedAt)} · ${
+                  contextState.data.sessionType || "browser"
+                }`
+              : "上下文还在准备中。点击刷新后会优先读取后端 context/live，未接通时会自动降级到本地快照。"}
+          </p>
+
+          <div className="agent-mini-grid">
+            <article className="agent-mini-card">
+              <span>Window</span>
+              <strong>{safeText(contextState.data?.windowTitle, "未提供")}</strong>
+              <p>{safeText(contextState.data?.appName, "未提供")}</p>
+            </article>
+            <article className="agent-mini-card">
+              <span>System</span>
+              <strong>{safeText(contextState.data?.system?.summary, "未提供")}</strong>
+              <p>
+                {safeText(contextState.data?.system?.distro, "未提供")} ·{" "}
+                {safeText(contextState.data?.system?.device, "未提供")}
+              </p>
+            </article>
+            <article className="agent-mini-card">
+              <span>Clipboard</span>
+              <strong>{previewText(clipboardText || contextState.data?.clipboardPreview, 64)}</strong>
+              <p>{safeText(contextState.data?.clipboardPreview, "未读取")}</p>
+            </article>
+            <article className="agent-mini-card">
+              <span>Prompt</span>
+              <strong>{previewText(input, 64, "未填写")}</strong>
+              <p>{safeText(contextState.data?.prompt, "等待用户输入")}</p>
+            </article>
+          </div>
+
+          <div className="tag-row agent-teams__signals">
+            {contextState.data?.signals?.length ? (
+              contextState.data.signals.map((item) => (
+                <span key={item} className="tag-pill">
+                  {item}
+                </span>
+              ))
+            ) : (
+              <span className="tag-pill">等待上下文结果</span>
+            )}
+          </div>
+
+          {contextState.data?.notes?.length ? (
+            <ul className="agent-teams__notes">
+              {contextState.data.notes.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          ) : null}
+        </article>
+
+        <article className="agent-teams__card">
+          <div className="agent-teams__card-head">
+            <div>
+              <span>场景与输入</span>
+              <strong>{agentScenarioLabel(scenario)}</strong>
+            </div>
+            <span className={`tone-pill is-${resultTone}`}>
+              {resultState.status === "idle"
+                ? "等待运行"
+                : resultState.status === "loading"
+                  ? "运行中"
+                  : resultState.status === "fallback"
+                    ? "本地降级"
+                    : resultState.status === "error"
+                      ? "运行失败"
+                      : "已完成"}
+            </span>
+          </div>
+
+          <div className="agent-scenario-switch">
+            {Object.keys(AGENT_SCENARIO_LABELS).map((item) => (
+              <button
+                key={item}
+                type="button"
+                className={`copy-button ${scenario === item ? "is-active" : ""}`}
+                onClick={() => onScenarioChange(item)}
+              >
+                {agentScenarioLabel(item)}
+              </button>
+            ))}
+          </div>
+
+          <label className="agent-teams__field">
+            <span>用户输入</span>
+            <textarea
+              value={input}
+              placeholder={agentScenarioDefaultInput(scenario)}
+              onChange={(event) => onInputChange(event.target.value)}
+            />
+          </label>
+
+          <div className="agent-teams__actions">
+            <button type="button" className="copy-button" onClick={onReadClipboard}>
+              读取剪贴板
+            </button>
+            <button type="button" className="copy-button" onClick={onRefreshContext}>
+              刷新上下文
+            </button>
+            <button type="button" className="action-run" onClick={onRunTeams}>
+              运行多智能体
+            </button>
+          </div>
+
+          <p className="agent-teams__meta">
+            {clipboardText
+              ? `当前剪贴板已缓存，可作为上下文补充。`
+              : "剪贴板内容是可选输入，后续可以接后端或浏览器授权后再自动读取。"}
+          </p>
+        </article>
+      </div>
+
+      {resultState.result ? (
+        <div className="agent-teams__results">
+          <div className="agent-teams__result-head">
+            <div>
+              <p className="eyebrow">协作结果</p>
+              <h4>{safeText(resultState.result.scenarioLabel, agentScenarioLabel(scenario))}</h4>
+            </div>
+            <div className="tag-row">
+              <span className={`tone-pill is-${resultTone}`}>{resultState.result.source || "local"}</span>
+              <span className="tone-pill is-stable">
+                {formatProbeTime(resultState.result.collectedAt)}
+              </span>
+            </div>
+          </div>
+
+          <div className="agent-role-grid">
+            <AgentRoleCard
+              role="collector"
+              title={resultState.result.collector.title}
+              summary={resultState.result.collector.summary}
+              items={resultState.result.collector.evidence}
+              tone="stable"
+            />
+            <AgentRoleCard
+              role="operator"
+              title={resultState.result.operator.title}
+              summary={resultState.result.operator.summary}
+              items={resultState.result.operator.steps}
+              tone="warning"
+            />
+            <AgentRoleCard
+              role="writer"
+              title={resultState.result.writer.title}
+              summary={resultState.result.writer.summary}
+              items={resultState.result.writer.notes}
+              body={
+                resultState.result.writer.draftBody
+                  ? `${safeText(resultState.result.writer.draftTitle, "Writer draft")}\n\n${resultState.result.writer.draftBody}`
+                  : ""
+              }
+              tone="stable"
+            />
+            <AgentRoleCard
+              role="verifier"
+              title={resultState.result.verifier.title}
+              summary={resultState.result.verifier.summary}
+              items={resultState.result.verifier.checks}
+              tone="critical"
+            />
+          </div>
+
+          <article className="agent-outcome">
+            <div className="agent-outcome__head">
+              <div>
+                <span>处理结论</span>
+                <strong>{resultState.result.outcome.label}</strong>
+              </div>
+              <span className="tone-pill is-stable">
+                {resultState.result.outcome.confidence}%
+              </span>
+            </div>
+
+            <p>{resultState.result.outcome.summary}</p>
+            <p className="agent-outcome__next">{resultState.result.outcome.nextStep}</p>
+            <div className="tag-row">
+              <span className="tag-pill">{resultState.result.outcome.tone}</span>
+            </div>
+          </article>
+        </div>
+      ) : (
+        <p className="agent-empty">
+          点击“运行多智能体”后，这里会展示 collector / operator / writer / verifier
+          的分工输出和最终 outcome。
+        </p>
+      )}
+    </section>
+  );
+}
+
+function PrintRepairChainPanel({
+  actions,
+  probe,
+  snapshot,
+  actionState,
+  onPreview,
+  onRun
+}) {
+  const recommendedActionIds = probe.data?.solutionPlan?.recommendedActionIds || [];
+  const queueSummary = probe.data?.printers?.summary || "No configured print queue found";
+  const routeLabel = probe.data?.solutionPlan
+    ? solutionRouteLabel(probe.data.solutionPlan.route)
+    : "等待诊断";
+
+  return (
+    <section className="print-repair-chain">
+      <div className="print-repair-chain__head">
+        <div>
+          <p className="eyebrow">Printer Repair</p>
+          <h3>打印机驱动修复链</h3>
+          <p className="print-repair-chain__lede">
+            这一条链把最常用的三步放在最前面：先删旧队列，再重装关键驱动包，最后补 CUPS 过滤链权限和执行位。
+          </p>
+        </div>
+
+        <div className="tag-row">
+          <span className="tag-pill">{snapshot.symptom}</span>
+          <span className="tag-pill">{routeLabel}</span>
+          <span className="tag-pill">{queueSummary}</span>
+        </div>
+      </div>
+
+      {probe.data?.solutionPlan?.notes?.length ? (
+        <ul className="print-repair-chain__notes">
+          {probe.data.solutionPlan.notes.map((item) => (
+            <li key={item}>{item}</li>
+          ))}
+        </ul>
+      ) : null}
+
+      <div className="print-repair-chain__grid">
+        {PRINT_REPAIR_CHAIN.map((step) => {
+          const action = findActionById(actions, step.actionId);
+          const isBusy = actionState.loading && actionState.activeId === step.actionId;
+          const isRecommended =
+            recommendedActionIds.includes(step.actionId) ||
+            (step.actionId === "repair-print-stack" &&
+              probe.data?.solutionPlan?.ppdRelevant === false);
+
+          return (
+            <article
+              key={step.id}
+              className={`print-repair-step ${isRecommended ? "is-highlighted" : ""} ${
+                isBusy ? "is-busy" : ""
+              }`}
+              style={{ "--step-accent": step.accent }}
+            >
+              <div className="print-repair-step__head">
+                <div>
+                  <span>{step.step}</span>
+                  <strong>{action?.title || step.title}</strong>
+                </div>
+                <span className={`tone-pill is-${step.tone}`}>
+                  {action ? "已接入" : "待接入"}
+                </span>
+              </div>
+
+              <p className="print-repair-step__summary">{step.summary}</p>
+              <p className="print-repair-step__detail">{step.detail}</p>
+
+              <div className="tag-row print-repair-step__tags">
+                <span className="tag-pill">动作：{step.actionId}</span>
+                <span className="tag-pill">
+                  {isRecommended ? "当前建议" : "可手动触发"}
+                </span>
+              </div>
+
+              <div className="print-repair-step__buttons">
+                <button
+                  type="button"
+                  className="copy-button"
+                  disabled={actionState.loading || !action}
+                  onClick={() => onPreview(step.actionId)}
+                >
+                  预览
+                </button>
+                <button
+                  type="button"
+                  className="action-run"
+                  disabled={actionState.loading || !action}
+                  onClick={() => onRun(step.actionId)}
+                >
+                  {isBusy && actionState.mode === "run" ? "执行中..." : step.cta}
+                </button>
+              </div>
+
+              <p className="print-repair-step__note">
+                {step.note}
+                {action?.summary ? ` ${action.summary}` : ""}
+              </p>
+            </article>
+          );
+        })}
+      </div>
+
+      <div className="print-repair-chain__footer">
+        <span className="tag-pill">推荐顺序：删除旧队列 / 重装关键驱动包 / 修复过滤链权限</span>
+        <span className="tag-pill">后续动作：测试打印 / 回归检查 / 必要时重建队列</span>
+      </div>
     </section>
   );
 }
@@ -2382,6 +3300,17 @@ export default function App() {
   const [draft, setDraft] = useState("USB 打印机能识别，但打印队列卡住怎么办？");
   const [snapshot, setSnapshot] = useState(initialSnapshot);
   const [copiedId, setCopiedId] = useState("");
+  const [agentTeams, setAgentTeams] = useState({
+    scenario: "email-assistant",
+    input: agentScenarioDefaultInput("email-assistant"),
+    clipboardText: "",
+    contextStatus: "idle",
+    contextError: "",
+    context: null,
+    runStatus: "idle",
+    runError: "",
+    result: null
+  });
   const [actionCatalog, setActionCatalog] = useState([]);
   const [actionInputs, setActionInputs] = useState({});
   const [actionEnvironment, setActionEnvironment] = useState(null);
@@ -2429,6 +3358,27 @@ export default function App() {
   const sceneIntel = useMemo(
     () => buildSceneIntel(snapshot, sceneModule.id),
     [snapshot, sceneModule.id]
+  );
+  const agentContextFallback = useMemo(
+    () =>
+      buildFallbackAgentContext({
+        scenario: agentTeams.scenario,
+        input: agentTeams.input,
+        clipboardText: agentTeams.clipboardText,
+        snapshot,
+        probeData: probe.data,
+        actionEnvironment,
+        activeModule
+      }),
+    [
+      activeModule,
+      actionEnvironment,
+      agentTeams.clipboardText,
+      agentTeams.input,
+      agentTeams.scenario,
+      probe.data,
+      snapshot
+    ]
   );
   const latestPayload = useMemo(() => {
     for (let index = deferredHistory.length - 1; index >= 0; index -= 1) {
@@ -2504,6 +3454,154 @@ export default function App() {
         data: null,
         error: error instanceof Error ? error.message : String(error)
       });
+    }
+  }
+
+  async function refreshAgentContext({ silent = false } = {}) {
+    setAgentTeams((previous) => ({
+      ...previous,
+      contextStatus:
+        silent && previous.context ? previous.contextStatus : "loading",
+      contextError: ""
+    }));
+
+    try {
+      const payload = await fetchJson(`${API_BASE}/api/context/live`);
+      const nextContext = normalizeAgentContextPayload(
+        payload.context || payload.liveContext || payload.agentContext || payload,
+        agentContextFallback
+      );
+
+      setAgentTeams((previous) => ({
+        ...previous,
+        contextStatus: "ready",
+        contextError: "",
+        context: nextContext
+      }));
+
+      return nextContext;
+    } catch (error) {
+      const fallbackContext = agentContextFallback;
+
+      setAgentTeams((previous) => ({
+        ...previous,
+        contextStatus: "fallback",
+        contextError: "",
+        context: fallbackContext
+      }));
+
+      return fallbackContext;
+    }
+  }
+
+  async function readAgentClipboard() {
+    try {
+      const text =
+        typeof navigator !== "undefined" && navigator.clipboard?.readText
+          ? await navigator.clipboard.readText()
+          : "";
+
+      setAgentTeams((previous) => ({
+        ...previous,
+        clipboardText: text || previous.clipboardText
+      }));
+    } catch {
+      setAgentTeams((previous) => ({
+        ...previous,
+        clipboardText: previous.clipboardText
+      }));
+    }
+  }
+
+  function handleAgentScenarioChange(nextScenario) {
+    setAgentTeams((previous) => {
+      const previousDefault = agentScenarioDefaultInput(previous.scenario);
+      const shouldResetInput =
+        !previous.input.trim() || previous.input === previousDefault;
+
+      return {
+        ...previous,
+        scenario: nextScenario,
+        input: shouldResetInput
+          ? agentScenarioDefaultInput(nextScenario)
+          : previous.input,
+        result: null,
+        runStatus: "idle",
+        runError: ""
+      };
+    });
+  }
+
+  function handleAgentInputChange(value) {
+    setAgentTeams((previous) => ({
+      ...previous,
+      input: value
+    }));
+  }
+
+  async function runAgentTeams() {
+    const scenario = agentTeams.scenario;
+    const input = agentTeams.input.trim();
+    const fallbackContext = agentTeams.context || agentContextFallback;
+
+    setAgentTeams((previous) => ({
+      ...previous,
+      runStatus: "loading",
+      runError: ""
+    }));
+
+    try {
+      const payload = await fetchJson(`${API_BASE}/api/agent-teams/run`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          scene: scenario,
+          scenario,
+          prompt: input,
+          input,
+          context: fallbackContext,
+          clipboardText: agentTeams.clipboardText
+        })
+      });
+
+      const nextContext = normalizeAgentContextPayload(
+        payload.context ||
+          payload.result?.context ||
+          payload.liveContext ||
+          payload.agentContext ||
+          fallbackContext,
+        fallbackContext
+      );
+      const nextResult = normalizeAgentResult(
+        payload.result || payload.agentResult || payload.teamResult || payload,
+        nextContext
+      );
+
+      setAgentTeams((previous) => ({
+        ...previous,
+        contextStatus: "ready",
+        context: nextContext,
+        runStatus: "ready",
+        runError: "",
+        result: nextResult
+      }));
+    } catch (error) {
+      const fallbackResult = buildFallbackAgentResult({
+        scenario,
+        input,
+        context: fallbackContext
+      });
+
+      setAgentTeams((previous) => ({
+        ...previous,
+        contextStatus: previous.context ? previous.contextStatus : "fallback",
+        context: fallbackContext,
+        runStatus: "fallback",
+        runError: "",
+        result: fallbackResult
+      }));
     }
   }
 
@@ -2922,7 +4020,19 @@ export default function App() {
   useEffect(() => {
     runLiveProbe({ silent: true });
     loadActions();
+    refreshAgentContext({ silent: true });
   }, []);
+
+  useEffect(() => {
+    refreshAgentContext({ silent: true });
+  }, [
+    snapshot.distro,
+    snapshot.device,
+    snapshot.connection,
+    snapshot.symptom,
+    probe.data?.timestamp,
+    actionEnvironment?.sessionType
+  ]);
 
   useEffect(() => {
     const plan = actionState.result?.ppdTuningPlan;
@@ -3098,7 +4208,35 @@ export default function App() {
             ))}
           </div>
 
+          <PrintRepairChainPanel
+            actions={actionCatalog}
+            probe={probe}
+            snapshot={snapshot}
+            actionState={actionState}
+            onPreview={(actionId) => runAction(actionId, "preview")}
+            onRun={(actionId) => runAction(actionId, "run")}
+          />
           <LiveProbePanel probe={probe} onRefresh={runLiveProbe} />
+          <AgentTeamsPanel
+            contextState={{
+              status: agentTeams.contextStatus,
+              error: agentTeams.contextError,
+              data: agentTeams.context || agentContextFallback
+            }}
+            scenario={agentTeams.scenario}
+            input={agentTeams.input}
+            clipboardText={agentTeams.clipboardText}
+            resultState={{
+              status: agentTeams.runStatus,
+              error: agentTeams.runError,
+              result: agentTeams.result
+            }}
+            onScenarioChange={handleAgentScenarioChange}
+            onInputChange={handleAgentInputChange}
+            onRefreshContext={() => refreshAgentContext()}
+            onReadClipboard={readAgentClipboard}
+            onRunTeams={runAgentTeams}
+          />
           <ActionConsole
             actions={actionCatalog}
             actionEnvironment={actionEnvironment}

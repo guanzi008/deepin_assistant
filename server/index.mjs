@@ -344,13 +344,14 @@ const ACTIONS = {
   "repair-print-stack": {
     id: "repair-print-stack",
     title: "重装核心打印栈",
-    description: "重装 CUPS 与通用打印驱动包，并在完成后重启打印服务。",
+    description: "重装 CUPS 与通用打印驱动包，顺带修复 CUPS 过滤链权限，并在完成后重启打印服务。",
     module: "repair",
     risk: "privileged",
     requiresRoot: true,
     previewCommands: [
       "dpkg -l | grep -Ei 'cups|printer-driver|ghostscript'",
       `apt-get install --reinstall -y ${CORE_PRINT_PACKAGES.join(" ")}`,
+      "chmod 755 /usr/lib/cups/filter/*",
       "systemctl restart cups",
       "systemctl is-active cups"
     ]
@@ -401,11 +402,16 @@ async function readJsonBody(req) {
   }
 }
 
-async function runShell(command, timeout = 7000) {
+async function runShell(command, timeout = 7000, options = {}) {
+  const env = options.env ? { ...process.env, ...options.env } : { ...process.env };
+  delete env.npm_config_prefix;
+  delete env.NPM_CONFIG_PREFIX;
+
   try {
     const { stdout, stderr } = await execFileAsync("bash", ["-lc", command], {
       timeout,
-      maxBuffer: 1024 * 1024
+      maxBuffer: 1024 * 1024,
+      env
     });
 
     return {
@@ -923,6 +929,864 @@ function buildRecommendations(symptom) {
   };
 
   return base[symptom] || base["打印队列卡住"];
+}
+
+function splitLines(value) {
+  return String(value || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function truncateText(value, limit = 240) {
+  const text = String(value || "").trim();
+
+  if (text.length <= limit) {
+    return text;
+  }
+
+  return `${text.slice(0, limit - 1)}…`;
+}
+
+function firstMatchingLine(lines, pattern) {
+  return lines.find((line) => pattern.test(line)) || "";
+}
+
+function parseKeyValueLines(raw) {
+  return splitLines(raw).reduce((accumulator, line) => {
+    const separator = line.indexOf("=");
+
+    if (separator === -1) {
+      return accumulator;
+    }
+
+    const key = line.slice(0, separator).trim();
+    const value = line.slice(separator + 1).trim();
+    accumulator[key] = value;
+    return accumulator;
+  }, {});
+}
+
+function parseXpropWindowDetails(raw) {
+  const lines = splitLines(raw);
+  const titleLine =
+    firstMatchingLine(lines, /_NET_WM_NAME/i) ||
+    firstMatchingLine(lines, /WM_NAME/i);
+  const classLine = firstMatchingLine(lines, /WM_CLASS/i);
+  const rootLine = firstMatchingLine(lines, /_NET_ACTIVE_WINDOW/i);
+
+  const titleMatch = titleLine.match(/=\s*(.+)$/);
+  const title = titleMatch?.[1]?.replace(/^"/, "").replace(/"$/, "") || "";
+  const classMatch = classLine.match(/=\s*(.+)$/);
+  const classValue = classMatch?.[1] || "";
+  const classParts = classValue
+    .split(",")
+    .map((item) => item.trim().replace(/^"/, "").replace(/"$/, ""))
+    .filter(Boolean);
+  const windowIdMatch = rootLine.match(/window id #\s*(0x[0-9a-fA-F]+)/i);
+
+  return {
+    windowId: windowIdMatch?.[1] || "",
+    title: title || "",
+    className: classParts.join(" / "),
+    rawLines: lines
+  };
+}
+
+function buildDesktopCommandEnv(display) {
+  if (!display) {
+    return {};
+  }
+
+  return {
+    DISPLAY: display,
+    XAUTHORITY: process.env.XAUTHORITY || path.join(os.homedir(), ".Xauthority")
+  };
+}
+
+function parseClipboardProbe(raw) {
+  const lines = splitLines(raw);
+  const sourceLine = firstMatchingLine(lines, /^CLIPBOARD_SOURCE=/);
+  const source = sourceLine.split("=").slice(1).join("=").trim() || "unavailable";
+  const contentLines = lines.filter((line) => !/^CLIPBOARD_SOURCE=/.test(line));
+  const content = truncateText(contentLines.join("\n"), 800);
+
+  return {
+    source,
+    available: source !== "unavailable" && content.length > 0,
+    content,
+    rawLines: contentLines
+  };
+}
+
+function inferRepairTopic(prompt, diagnostics = null) {
+  const text = String(prompt || "").toLowerCase();
+
+  if (/打印|printer|cups|ppd|lpstat|lpinfo/.test(text)) {
+    return {
+      id: "printer",
+      label: "打印链路",
+      summary: "优先收敛打印服务、队列和驱动链路。"
+    };
+  }
+
+  if (/声音|音频|audio|sound|pactl|pipewire|wireplumber/.test(text)) {
+    return {
+      id: "audio",
+      label: "音频链路",
+      summary: "优先检查音频服务和默认输出设备。"
+    };
+  }
+
+  if (/安装|微信|apt|软件源|包管理|deb|flatpak|snap/.test(text)) {
+    return {
+      id: "install",
+      label: "安装问题",
+      summary: "优先检查软件源、包管理状态和安装所需空间。"
+    };
+  }
+
+  if (/网络|wifi|wlan|wireless|dns|断网|联网|nmcli|network/.test(text)) {
+    return {
+      id: "network",
+      label: "网络链路",
+      summary: "优先检查网卡状态、地址获取和 DNS。"
+    };
+  }
+
+  if (diagnostics?.inference?.symptom === "驱动 / 过滤链异常") {
+    return {
+      id: "driver",
+      label: "驱动链路",
+      summary: "当前诊断更像驱动或过滤链问题。"
+    };
+  }
+
+  return {
+    id: "generic",
+    label: "通用修复",
+    summary: "问题描述还不够具体，先做基础系统状态检查。"
+  };
+}
+
+function buildRepairPlan(topic, diagnostics) {
+  const printDriverPlan = {
+    questions: diagnostics.printers.queues.length
+      ? ["是否先清空旧队列，再重装驱动和修复过滤链权限？"]
+      : ["当前没有现成队列，可以先按三步修复链处理，再重新建队列。"],
+    steps: [
+      "删除旧队列并清理残留作业",
+      "重装关键驱动包和 CUPS 基础组件",
+      "修复 CUPS 过滤链权限并重新检查服务"
+    ],
+    commands: [
+      "reset-print-queues",
+      "repair-print-stack",
+      "run-queue-regression-check",
+      "lpstat -t"
+    ],
+    followUp:
+      diagnostics.printers.queues.length > 0
+        ? "三步处理后，再做一次队列回归检查和测试打印。"
+        : "三步处理后，再重新发现设备或创建打印队列。"
+  };
+
+  const plans = {
+    printer: {
+      ...printDriverPlan
+    },
+    audio: {
+      questions: ["当前是没有声音、麦克风异常，还是某个播放器没有输出？"],
+      steps: [
+        "确认 PipeWire / WirePlumber 状态",
+        "检查默认输出设备和音量",
+        "再判断是否需要重启用户会话音频服务"
+      ],
+      commands: [
+        "systemctl --user status pipewire pipewire-pulse wireplumber",
+        "pactl info",
+        "pactl list short sinks",
+        "journalctl --user -u pipewire --since '10 min ago' --no-pager -n 60"
+      ],
+      followUp: "如果服务状态正常，再看应用本身是否选错了输出设备。"
+    },
+    network: {
+      questions: ["网络是完全断开，还是能连 Wi-Fi 但不能上网？"],
+      steps: [
+        "确认网卡和地址状态",
+        "检查 NetworkManager 和 DNS",
+        "再决定是重连网络还是刷新配置"
+      ],
+      commands: [
+        "nmcli dev status",
+        "ip -brief address",
+        "journalctl -u NetworkManager --since '10 min ago' --no-pager -n 60",
+        "resolvectl status"
+      ],
+      followUp: "如果地址和 DNS 都正常，再进一步排查路由和网关。"
+    },
+    install: {
+      questions: ["要安装的具体软件名是什么，或者是从应用商店、deb 包还是容器安装？"],
+      steps: [
+        "确认安装目标和软件来源",
+        "检查软件源和包管理状态",
+        "再决定是 apt、应用商店还是 flatpak 路线"
+      ],
+      commands: [
+        "apt-cache policy",
+        "apt update",
+        "journalctl -u apt-daily --since '10 min ago' --no-pager -n 40",
+        "grep -R '^deb ' /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null"
+      ],
+      followUp: "先把包管理状态确认清楚，再执行安装。"
+    },
+    driver: {
+      ...printDriverPlan
+    },
+    generic: {
+      questions: ["能否再补一句更具体的表现，比如打印、声音、网络还是安装问题？"],
+      steps: [
+        "先收集基础系统状态",
+        "确认问题属于哪个功能面",
+        "再选择对应的修复路线"
+      ],
+      commands: [
+        "systemctl --failed",
+        "journalctl -p warning -b --no-pager -n 60",
+        "ip -brief address",
+        "lpstat -t"
+      ],
+      followUp: "拿到更具体的故障描述后，可以把步骤收敛得更准。"
+    }
+  };
+
+  return plans[topic.id] || plans.generic;
+}
+
+async function collectLiveDesktopContext() {
+  const user = os.userInfo().username;
+  const sessionIdResult = await runShell(
+    `loginctl list-sessions --no-legend | awk -v user=${shellQuote(
+      user
+    )} '$3 == user && / active / {print $1; exit}'`,
+    4000
+  );
+  const sessionId = sessionIdResult.stdout.trim();
+  const sessionResult = sessionId
+    ? await runShell(
+        `loginctl show-session ${shellQuote(
+          sessionId
+        )} -p Name -p Display -p Type -p State -p Remote -p Desktop`,
+        4000
+      )
+    : {
+        ok: false,
+        command: "loginctl show-session",
+        stdout: "",
+        stderr: "No active session discovered"
+      };
+  const sessionData = parseKeyValueLines(sessionResult.stdout);
+  const display = sessionData.Display || process.env.DISPLAY || "";
+  const sessionType =
+    sessionData.Type ||
+    process.env.XDG_SESSION_TYPE ||
+    (display ? "x11" : "terminal");
+  const desktopEnv = buildDesktopCommandEnv(display);
+  const [windowProbe, clipboardProbe, xdotoolCheck, xclipCheck, xselCheck, wlPasteCheck] =
+    display
+      ? await Promise.all([
+          runShell(
+            [
+              'if command -v xprop >/dev/null 2>&1; then',
+              '  ROOT_ACTIVE_WINDOW="$(xprop -root _NET_ACTIVE_WINDOW 2>/dev/null || true)"',
+              '  echo "ROOT_ACTIVE_WINDOW=$ROOT_ACTIVE_WINDOW"',
+              '  ACTIVE_WINDOW_ID="$(printf \'%s\\n\' "$ROOT_ACTIVE_WINDOW" | sed -n \'s/.*window id # \\(0x[0-9a-fA-F]*\\).*/\\1/p\')"',
+              '  if [ -n "$ACTIVE_WINDOW_ID" ]; then',
+              '    echo "ACTIVE_WINDOW_ID=$ACTIVE_WINDOW_ID"',
+              '    xprop -id "$ACTIVE_WINDOW_ID" WM_CLASS WM_NAME _NET_WM_NAME 2>/dev/null || true',
+              '    if command -v xdotool >/dev/null 2>&1; then',
+              '      WINDOW_NAME="$(xdotool getwindowname "$ACTIVE_WINDOW_ID" 2>/dev/null || true)"',
+              '      [ -n "$WINDOW_NAME" ] && echo "ACTIVE_WINDOW_TITLE=$WINDOW_NAME"',
+              "    fi",
+              "  fi",
+              "fi"
+            ].join("\n"),
+            5000,
+            desktopEnv
+          ),
+          runShell(
+            [
+              'if command -v xclip >/dev/null 2>&1; then',
+              '  echo "CLIPBOARD_SOURCE=xclip"',
+              "  xclip -o -selection clipboard 2>/dev/null || true",
+              'elif command -v xsel >/dev/null 2>&1; then',
+              '  echo "CLIPBOARD_SOURCE=xsel"',
+              "  xsel -o -b 2>/dev/null || true",
+              'elif command -v wl-paste >/dev/null 2>&1; then',
+              '  echo "CLIPBOARD_SOURCE=wl-paste"',
+              "  wl-paste --no-newline 2>/dev/null || true",
+              "else",
+              '  echo "CLIPBOARD_SOURCE=unavailable"',
+              "fi"
+            ].join("\n"),
+            3000,
+            desktopEnv
+          ),
+          runShell(
+            'if command -v xdotool >/dev/null 2>&1; then echo yes; fi',
+            2000,
+            desktopEnv
+          ),
+          runShell(
+            'if command -v xclip >/dev/null 2>&1; then echo yes; fi',
+            2000,
+            desktopEnv
+          ),
+          runShell(
+            'if command -v xsel >/dev/null 2>&1; then echo yes; fi',
+            2000,
+            desktopEnv
+          ),
+          runShell(
+            'if command -v wl-paste >/dev/null 2>&1; then echo yes; fi',
+            2000,
+            desktopEnv
+          )
+        ])
+      : [
+          {
+            ok: false,
+            command: "xprop",
+            stdout: "",
+            stderr: "DISPLAY not available"
+          },
+          {
+            ok: false,
+            command: "clipboard",
+            stdout: "CLIPBOARD_SOURCE=unavailable",
+            stderr: "DISPLAY not available"
+          },
+          { ok: false, command: "xdotool", stdout: "", stderr: "DISPLAY not available" },
+          { ok: false, command: "xclip", stdout: "", stderr: "DISPLAY not available" },
+          { ok: false, command: "xsel", stdout: "", stderr: "DISPLAY not available" },
+          { ok: false, command: "wl-paste", stdout: "", stderr: "DISPLAY not available" }
+        ];
+
+  const windowData = parseXpropWindowDetails(windowProbe.stdout);
+  const clipboardData = parseClipboardProbe(clipboardProbe.stdout);
+  const activeWindowTitle = windowData.title || windowData.rawLines.find((line) => /ACTIVE_WINDOW_TITLE=/.test(line))?.split("=").slice(1).join("=")?.trim() || "";
+  const windowClass = windowData.className || "";
+  const windowId = windowData.windowId || "";
+  const clipboardText = clipboardData.content;
+  const clipboardAvailable = clipboardData.source !== "unavailable" && Boolean(clipboardText);
+
+  const notes = [];
+
+  if (!display) {
+    notes.push("当前进程没有拿到 DISPLAY，桌面窗口和剪贴板只能部分采集。");
+  }
+
+  if (!windowId) {
+    notes.push("没有找到当前活动窗口 ID，窗口信息可能来自终端会话或权限受限的桌面环境。");
+  }
+
+  if (!clipboardAvailable) {
+    notes.push("当前环境没有可用的剪贴板读取工具，剪贴板内容没有直接采到。");
+  }
+
+  const context = {
+    timestamp: new Date().toISOString(),
+    host: {
+      hostname: os.hostname(),
+      user
+    },
+    session: {
+      id: sessionId || "",
+      name: sessionData.Name || user,
+      display,
+      type: sessionType,
+      state: sessionData.State || "unknown",
+      remote: (sessionData.Remote || "no") === "yes",
+      desktop: sessionData.Desktop || "",
+      hasGuiAccess: Boolean(display),
+      summary: display
+        ? `${sessionType} session on ${display}`
+        : "No graphical session available"
+    },
+    window: {
+      id: windowId,
+      title: truncateText(activeWindowTitle, 160),
+      className: truncateText(windowClass, 120),
+      source: windowId ? "xprop" : "unavailable",
+      available: Boolean(windowId || activeWindowTitle || windowClass)
+    },
+    clipboard: {
+      available: clipboardAvailable,
+      source: clipboardData.source,
+      preview: truncateText(clipboardText, 500),
+      length: clipboardText.length,
+      truncated: clipboardText.length > 500
+    },
+    capabilities: {
+      xdotool: xdotoolCheck.stdout.trim() === "yes",
+      xclip: xclipCheck.stdout.trim() === "yes",
+      xsel: xselCheck.stdout.trim() === "yes",
+      wlPaste: wlPasteCheck.stdout.trim() === "yes"
+    },
+    signals: [
+      {
+        name: "session",
+        value: `${sessionType} / ${display || "no-display"}`,
+        source: "loginctl"
+      },
+      {
+        name: "window",
+        value: activeWindowTitle || windowClass || "unavailable",
+        source: windowId ? "xprop" : "unavailable"
+      },
+      {
+        name: "clipboard",
+        value: clipboardAvailable ? clipboardText.split("\n")[0] : "unavailable",
+        source: clipboardData.source
+      }
+    ],
+    notes
+  };
+
+  context.summary = [
+    `session=${context.session.type || "unknown"}`,
+    `window=${context.window.title || "unavailable"}`,
+    `clipboard=${clipboardAvailable ? "available" : "unavailable"}`
+  ].join(" | ");
+
+  return context;
+}
+
+function buildFallbackLiveContext(contextOverride = null, prompt = "", clipboardText = "") {
+  const overrideWindowTitle =
+    contextOverride?.windowTitle || contextOverride?.window?.title || "";
+  const overrideAppName =
+    contextOverride?.appName || contextOverride?.window?.className || "";
+  const overrideClipboard =
+    clipboardText ||
+    contextOverride?.clipboardText ||
+    contextOverride?.clipboardPreview ||
+    contextOverride?.clipboard?.preview ||
+    "";
+  const overrideSessionType =
+    contextOverride?.sessionType || contextOverride?.session?.type || "unknown";
+  const clippedClipboard = truncateText(overrideClipboard, 500);
+
+  return {
+    timestamp: new Date().toISOString(),
+    source: "fallback",
+    host: {
+      hostname: os.hostname(),
+      user: process.env.USER || process.env.LOGNAME || "unknown"
+    },
+    session: {
+      id: "",
+      name: process.env.USER || process.env.LOGNAME || "unknown",
+      display: process.env.DISPLAY || "",
+      type: overrideSessionType,
+      state: "unknown",
+      remote: false,
+      desktop: "",
+      hasGuiAccess: Boolean(process.env.DISPLAY),
+      summary: "Desktop context collection failed, using fallback"
+    },
+    window: {
+      id: "",
+      title: truncateText(overrideWindowTitle, 160),
+      className: truncateText(overrideAppName, 120),
+      source: "fallback",
+      available: Boolean(overrideWindowTitle || overrideAppName)
+    },
+    clipboard: {
+      available: Boolean(clippedClipboard),
+      source: clippedClipboard ? "request" : "unavailable",
+      preview: clippedClipboard,
+      length: clippedClipboard.length,
+      truncated: overrideClipboard.length > 500
+    },
+    capabilities: {
+      xdotool: false,
+      xclip: false,
+      xsel: false,
+      wlPaste: false
+    },
+    signals: [],
+    notes: [
+      "实时桌面上下文采集失败，已回退到请求侧补充的上下文。"
+    ],
+    summary: [
+      `session=${overrideSessionType || "unknown"}`,
+      `window=${overrideWindowTitle || "unavailable"}`,
+      `clipboard=${clippedClipboard ? "available" : "unavailable"}`
+    ].join(" | "),
+    prompt
+  };
+}
+
+function mergeLiveContext(baseContext, contextOverride = null, prompt = "", clipboardText = "") {
+  const overrideWindowTitle =
+    contextOverride?.windowTitle || contextOverride?.window?.title || "";
+  const overrideAppName =
+    contextOverride?.appName || contextOverride?.window?.className || "";
+  const overrideClipboard =
+    clipboardText ||
+    contextOverride?.clipboardText ||
+    contextOverride?.clipboardPreview ||
+    contextOverride?.clipboard?.preview ||
+    "";
+  const overrideSessionType =
+    contextOverride?.sessionType || contextOverride?.session?.type || "";
+  const nextWindowTitle = baseContext.window?.title || overrideWindowTitle;
+  const nextWindowClass = baseContext.window?.className || overrideAppName;
+  const nextClipboardPreview =
+    baseContext.clipboard?.preview || truncateText(overrideClipboard, 500);
+  const signals = Array.isArray(baseContext.signals) ? [...baseContext.signals] : [];
+  const notes = Array.isArray(baseContext.notes) ? [...baseContext.notes] : [];
+
+  if (!baseContext.window?.title && overrideWindowTitle) {
+    signals.push({
+      name: "window",
+      value: truncateText(overrideWindowTitle, 160),
+      source: "request"
+    });
+  }
+
+  if (!baseContext.clipboard?.available && nextClipboardPreview) {
+    signals.push({
+      name: "clipboard",
+      value: truncateText(nextClipboardPreview, 120),
+      source: "request"
+    });
+  }
+
+  if (prompt) {
+    signals.push({
+      name: "prompt",
+      value: truncateText(prompt, 120),
+      source: "request"
+    });
+  }
+
+  if (contextOverride) {
+    notes.push("请求侧补充了浏览器上下文，用于补齐窗口或剪贴板线索。");
+  }
+
+  return {
+    ...baseContext,
+    source: baseContext.source || "backend",
+    session: {
+      ...baseContext.session,
+      type: baseContext.session?.type || overrideSessionType || "unknown"
+    },
+    window: {
+      ...baseContext.window,
+      title: truncateText(nextWindowTitle, 160),
+      className: truncateText(nextWindowClass, 120),
+      available: baseContext.window?.available || Boolean(nextWindowTitle || nextWindowClass)
+    },
+    clipboard: {
+      ...baseContext.clipboard,
+      available: baseContext.clipboard?.available || Boolean(nextClipboardPreview),
+      source:
+        baseContext.clipboard?.source && baseContext.clipboard.source !== "unavailable"
+          ? baseContext.clipboard.source
+          : nextClipboardPreview
+            ? "request"
+            : "unavailable",
+      preview: nextClipboardPreview,
+      length: nextClipboardPreview.length,
+      truncated:
+        baseContext.clipboard?.truncated || overrideClipboard.length > 500
+    },
+    signals,
+    notes,
+    summary: [
+      `session=${baseContext.session?.type || overrideSessionType || "unknown"}`,
+      `window=${nextWindowTitle || "unavailable"}`,
+      `clipboard=${nextClipboardPreview ? "available" : "unavailable"}`
+    ].join(" | "),
+    prompt
+  };
+}
+
+function inferAgentScene(scene, prompt) {
+  const normalizedScene = String(scene || "").trim();
+  const normalizedPrompt = String(prompt || "").toLowerCase();
+
+  if (normalizedScene === "email-assistant" || /邮件|email|mail|写信|发信/.test(normalizedPrompt)) {
+    return "email-assistant";
+  }
+
+  if (
+    normalizedScene === "system-repair" ||
+    /打印|声音|网络|安装|修复|cups|驱动|软件源|故障/.test(normalizedPrompt)
+  ) {
+    return "system-repair";
+  }
+
+  return "system-repair";
+}
+
+function buildEmailAgentRun(prompt, context) {
+  const windowTitle = context.window.title || context.session.summary || "当前桌面";
+  const clipboardPreview = context.clipboard.preview || "";
+  const hasClipboard = context.clipboard.available;
+  const promptText = String(prompt || "");
+  const promptLine = promptText ? `用户输入：${promptText}` : "用户输入：未提供";
+  const recipientHint = promptText.match(/[\w.+-]+@[\w.-]+\.\w+/g) || [];
+  const subject = promptText && /邮件|mail|email/.test(promptText)
+    ? truncateText(promptText.replace(/[：“”"]/g, "").trim(), 48) || "邮件草稿"
+    : "关于 deepin Agent Teams 的邮件草稿";
+  const body = [
+    "你好，",
+    "",
+    "我先根据当前桌面上下文整理了一版邮件草稿，方便你直接修改后发送。",
+    "",
+    `当前窗口：${windowTitle}`,
+    hasClipboard ? `剪贴板摘要：${clipboardPreview}` : "剪贴板当前没有可读取内容。",
+    "",
+    promptLine,
+    "",
+    "如果收件人还没有定，可以先补一行再发。"
+  ].join("\n");
+
+  return {
+    collector: {
+      status: "completed",
+      summary: "收集到当前窗口、会话信息和剪贴板线索。",
+      sources: [
+        { name: "session", value: context.session.summary },
+        { name: "window", value: windowTitle },
+        { name: "clipboard", value: hasClipboard ? clipboardPreview : "unavailable" }
+      ],
+      signals: context.signals
+    },
+    operator: {
+      status: "completed",
+      intent: "email_draft",
+      route: "email-assistant",
+      decision: recipientHint.length > 0 ? "draft_with_recipients_hint" : "draft_for_review",
+      questions: recipientHint.length > 0 ? [] : ["收件人还没明确，建议先补充。"],
+      plan: [
+        "读取桌面上下文",
+        "整理成一版可编辑邮件草稿",
+        "保留发送前人工确认"
+      ],
+      safety: ["发送前人工确认", "必要时补收件人和主题"]
+    },
+    writer: {
+      status: "completed",
+      subject,
+      recipients: recipientHint,
+      body,
+      notes: [
+        "这是基于当前桌面上下文生成的草稿。",
+        hasClipboard ? "剪贴板内容已纳入正文。" : "当前没有剪贴板内容，正文只用了窗口线索。"
+      ]
+    },
+    verifier: {
+      status: recipientHint.length > 0 ? "ready_for_review" : "needs_review",
+      checks: [
+        {
+          name: "subject",
+          ok: Boolean(subject)
+        },
+        {
+          name: "body",
+          ok: body.length > 80
+        },
+        {
+          name: "recipients",
+          ok: recipientHint.length > 0,
+          note: recipientHint.length > 0 ? recipientHint.join(", ") : "请补充收件人"
+        }
+      ],
+      summary:
+        recipientHint.length > 0
+          ? "邮件草稿可以进入人工复核。"
+          : "邮件草稿已经可用，但还需要补收件人。"
+    },
+    outcome: {
+      status: recipientHint.length > 0 ? "ready_for_review" : "needs_more_info",
+      summary:
+        recipientHint.length > 0
+          ? "邮件草稿已生成，建议先核对收件人和正文。"
+          : "邮件草稿已生成，但收件人还需要确认。",
+      nextAction:
+        recipientHint.length > 0
+          ? "review_email_draft"
+          : "provide_recipients",
+      confidence: recipientHint.length > 0 ? 0.82 : 0.68,
+      requiresConfirmation: true
+    }
+  };
+}
+
+function buildSystemRepairAgentRun(prompt, context, diagnostics) {
+  const topic = inferRepairTopic(prompt, diagnostics);
+  const plan = buildRepairPlan(topic, diagnostics);
+  const inferredRoute =
+    topic.id === "printer" || topic.id === "driver"
+      ? "stack-repair"
+      : diagnostics?.solutionPlan?.route || topic.id;
+  const topicSummaryById = {
+    printer:
+      "优先按“删除旧队列 -> 重装关键驱动包 -> 修复 CUPS 过滤链权限”的顺序处理。",
+    driver:
+      "优先按“删除旧队列 -> 重装关键驱动包 -> 修复 CUPS 过滤链权限”的顺序处理。",
+    audio: `${topic.summary}${diagnostics?.services?.summary ? ` 当前服务状态：${diagnostics.services.summary}。` : ""}`,
+    network: `${topic.summary}${diagnostics?.network?.summary ? ` 当前网络状态：${diagnostics.network.summary}。` : ""}`,
+    install: `${topic.summary}${
+      diagnostics?.resources?.storage?.summary
+        ? ` 当前磁盘状态：${diagnostics.resources.storage.summary}。`
+        : ""
+    }`,
+    generic: "先做基础系统状态收敛。"
+  };
+  const focus = topicSummaryById[topic.id] || topic.summary || "先做基础系统状态收敛。";
+  const promptLine = prompt ? `用户输入：${prompt}` : "用户输入：未提供";
+  const diagnosticHint = diagnostics
+    ? topic.id === "network"
+      ? `系统状态：${diagnostics.network.summary} / ${diagnostics.services.summary}`
+      : topic.id === "install"
+        ? `系统状态：${diagnostics.resources.storage.summary} / ${diagnostics.services.summary}`
+        : topic.id === "audio"
+          ? `系统状态：${diagnostics.services.summary} / ${diagnostics.network.summary}`
+          : `系统状态：${diagnostics.services.summary} / ${diagnostics.printers.summary}`
+    : "系统状态：未采集";
+  const commands = plan.commands;
+
+  return {
+    collector: {
+      status: "completed",
+      summary: "收集到桌面上下文和系统诊断快照。",
+      sources: [
+        { name: "session", value: context.session.summary },
+        { name: "window", value: context.window.title || "unavailable" },
+        { name: "diagnostics", value: diagnosticHint }
+      ],
+      signals: context.signals
+    },
+    operator: {
+      status: "completed",
+      intent: "system_repair",
+      route: inferredRoute,
+      topic: topic.label,
+      decision: topic.id === "generic" ? "need_clarification" : "repair_plan_ready",
+      questions: plan.questions,
+      plan: plan.steps,
+      commandsPreview: commands,
+      safety: [
+        "高风险动作前必须确认",
+        "优先导出结果，不直接修改系统",
+        "涉及服务或队列变更时保留日志"
+      ]
+    },
+    writer: {
+      status: "completed",
+      summary: focus,
+      brief: [
+        `问题方向：${topic.label}`,
+        promptLine,
+        `处理建议：${plan.steps.join("；")}`,
+        `可预览命令：${commands.join(" | ")}`
+      ].join("\n"),
+      commands,
+      notes: [plan.followUp]
+    },
+    verifier: {
+      status: topic.id === "generic" ? "needs_review" : "ready_for_review",
+      checks: [
+        {
+          name: "topic",
+          ok: topic.id !== "generic",
+          note: topic.label
+        },
+        {
+          name: "diagnostics",
+          ok: Boolean(diagnostics),
+          note: diagnostics ? focus : "建议先采集系统快照"
+        },
+        {
+          name: "confirmation",
+          ok: true,
+          note: "执行前需要用户确认"
+        }
+      ],
+      summary:
+        topic.id === "generic"
+          ? "信息还不够具体，先补一轮问题描述。"
+          : "修复计划已生成，进入人工复核更合适。"
+    },
+    outcome: {
+      status: topic.id === "generic" ? "needs_more_info" : "ready_for_review",
+      summary:
+        topic.id === "generic"
+          ? "已经拿到基础快照，但问题描述还不够具体。"
+          : `当前更适合走“${topic.label}”路线，先复核再执行。`,
+      nextAction:
+        topic.id === "generic" ? "clarify_problem" : "review_repair_plan",
+      confidence: topic.id === "generic" ? 0.55 : 0.84,
+      requiresConfirmation: true
+    }
+  };
+}
+
+async function collectLiveContextWithFallback(options = {}) {
+  try {
+    const liveContext = await collectLiveDesktopContext();
+    return mergeLiveContext(
+      liveContext,
+      options.context,
+      options.prompt,
+      options.clipboardText
+    );
+  } catch {
+    return buildFallbackLiveContext(
+      options.context,
+      options.prompt,
+      options.clipboardText
+    );
+  }
+}
+
+async function runAgentTeams(scene, prompt, options = {}) {
+  const liveContext = await collectLiveContextWithFallback({
+    context: options.context,
+    prompt,
+    clipboardText: options.clipboardText
+  });
+  const normalizedScene = inferAgentScene(scene, prompt);
+  const shouldCollectDiagnostics = normalizedScene === "system-repair";
+  const diagnostics = shouldCollectDiagnostics ? await collectDiagnostics() : null;
+  const roleOutputs =
+    normalizedScene === "email-assistant"
+      ? buildEmailAgentRun(prompt, liveContext)
+      : buildSystemRepairAgentRun(prompt, liveContext, diagnostics);
+
+  return {
+    source: "backend",
+    scene: normalizedScene,
+    scenario: normalizedScene,
+    prompt,
+    createdAt: new Date().toISOString(),
+    context: {
+      ...liveContext,
+      scenario: normalizedScene,
+      prompt
+    },
+    diagnostics,
+    collector: roleOutputs.collector,
+    operator: roleOutputs.operator,
+    writer: roleOutputs.writer,
+    verifier: roleOutputs.verifier,
+    outcome: roleOutputs.outcome
+  };
 }
 
 const PPD_TUNING_SCAN_PATTERN =
@@ -1549,17 +2413,18 @@ function buildIntelligentPlan(diagnostics) {
             "run-queue-smoke-test",
             "reset-print-queues"
           ]
-        : route === "stack-repair"
-          ? [
-              "repair-print-stack",
-              "export-ppd-tuning-plan",
-              "generate-ppd-patch-blueprint",
-              "validate-ppd-patch-copy",
-              "apply-validated-ppd-copy",
-              "run-queue-regression-check",
-              "rollback-ppd-backup",
-              "reset-print-queues"
-            ]
+      : route === "stack-repair"
+        ? [
+            "reset-print-queues",
+            "repair-print-stack",
+            "run-queue-regression-check",
+            "run-queue-smoke-test",
+            "export-ppd-tuning-plan",
+            "generate-ppd-patch-blueprint",
+            "validate-ppd-patch-copy",
+            "apply-validated-ppd-copy",
+            "rollback-ppd-backup"
+          ]
           : [
               "export-ppd-tuning-plan",
               "generate-ppd-patch-blueprint",
@@ -1605,25 +2470,28 @@ function buildIntelligentPlan(diagnostics) {
               ]
             }
           ]
-        : route === "stack-repair"
-          ? [
-              {
-                title: "恢复基础打印栈",
-                summary: "优先修复 cups / filters / driver 包，再决定是否要触碰 PPD。",
-                commands: ["repair-print-stack"]
-              },
-              {
-                title: "微调驱动配置",
-                summary: "仅在过滤链稳定后，再检查 PPD 和厂商扩展项。",
-                commands: [
-                  "export-ppd-tuning-plan",
-                  "generate-ppd-patch-blueprint",
-                  "validate-ppd-patch-copy",
-                  "apply-validated-ppd-copy",
-                  "rollback-ppd-backup"
-                ]
-              }
-            ]
+      : route === "stack-repair"
+        ? [
+            {
+              title: "删除旧队列",
+              summary: "先清理旧队列和残留作业，避免坏配置继续阻塞后续修复。",
+              commands: ["reset-print-queues"]
+            },
+            {
+              title: "重装关键驱动包",
+              summary: "重装 cups、通用打印组件和驱动包，先把基础打印栈恢复到可用状态。",
+              commands: ["repair-print-stack"]
+            },
+            {
+              title: "修复 CUPS 过滤链权限",
+              summary: "在重装后补一次权限整理，再回读服务和队列状态。",
+              commands: [
+                "repair-print-stack",
+                "run-queue-regression-check",
+                "run-queue-smoke-test"
+              ]
+            }
+          ]
           : [
               {
                 title: "校正页面参数",
@@ -1656,6 +2524,10 @@ function buildIntelligentPlan(diagnostics) {
     notes.push("当前症状更像链路或队列问题，不建议一开始就直接改 PPD。");
   }
 
+  if (route === "stack-repair") {
+    notes.push("建议按“删除旧队列 -> 重装关键驱动包 -> 修复 CUPS 过滤链权限”的顺序处理。");
+  }
+
   if (!diagnostics.printers.uriSample?.length) {
     notes.push("当前没有真实设备 URI，可先导出蓝图，再补充网络地址或设备连接信息。");
   }
@@ -1667,7 +2539,7 @@ function buildIntelligentPlan(diagnostics) {
       route === "ppd-tuning"
         ? "适合进入 PPD 微调和输出参数校正"
         : route === "stack-repair"
-          ? "优先修复打印栈，再考虑 PPD 细调"
+          ? "优先按三步链修复打印驱动，再考虑 PPD 细调"
           : route === "queue-recovery"
             ? "优先做队列恢复和服务刷新"
             : "优先恢复设备发现和队列蓝图",
@@ -1996,18 +2868,28 @@ function repairPrintStackScriptLines() {
     "INSTALL_OK=true",
     "export DEBIAN_FRONTEND=noninteractive",
     `if ! apt-get install --reinstall -y ${packages}; then`,
-    "  INSTALL_OK=false",
+      "  INSTALL_OK=false",
     "fi",
+    'echo "[Orbit] Repairing CUPS filter permissions"',
+    "PERMISSIONS_OK=true",
+    "FILTER_DIRS=(/usr/lib/cups/filter /usr/lib/cups/backend /usr/lib64/cups/filter /usr/lib64/cups/backend /usr/libexec/cups/filter /usr/libexec/cups/backend)",
+    'for dir in "${FILTER_DIRS[@]}"; do',
+    '  if [ -d "$dir" ]; then',
+    '    chmod 755 "$dir" || PERMISSIONS_OK=false',
+    '    find "$dir" -maxdepth 1 -type f -exec chmod 755 {} + || PERMISSIONS_OK=false',
+    "  fi",
+    "done",
     'echo "[Orbit] Restarting CUPS after package repair"',
     "RESTART_OK=true",
     "if ! systemctl restart cups; then",
     "  RESTART_OK=false",
     "fi",
     'POSTCHECK="$(systemctl is-active cups 2>&1 || true)"',
-    'DETAIL_TWO="post-check: $POSTCHECK"',
-    'SUMMARY="Core print stack reinstall attempted"',
+    'DETAIL_TWO="filter permissions: $PERMISSIONS_OK"',
+    'DETAIL_THREE="post-check: $POSTCHECK"',
+    'SUMMARY="Core print stack reinstall and permission repair attempted"',
     'STATUS=completed',
-    'if [ "$INSTALL_OK" != "true" ] || [ "$RESTART_OK" != "true" ] || [ "$POSTCHECK" != "active" ]; then STATUS=failed; fi'
+    'if [ "$INSTALL_OK" != "true" ] || [ "$PERMISSIONS_OK" != "true" ] || [ "$RESTART_OK" != "true" ] || [ "$POSTCHECK" != "active" ]; then STATUS=failed; fi'
   ];
 }
 
@@ -2205,7 +3087,11 @@ function buildPendingActionScript(action, diagnostics, manualExecution, params =
       "EXECUTED_BY=\"$(id -un 2>/dev/null || printf '%s' root)\"",
       ...repairPrintStackScriptLines(),
       "FINISHED_AT=\"$(date --iso-8601=seconds 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S%z')\"",
-      ...buildReceiptWriterLines(action.id, ["DETAIL_ONE", "DETAIL_TWO"]),
+      ...buildReceiptWriterLines(action.id, [
+        "DETAIL_ONE",
+        "DETAIL_TWO",
+        "DETAIL_THREE"
+      ]),
       "echo \"[Orbit] Receipt written to $RECEIPT_PATH\"",
       "echo \"[Orbit] Status: $STATUS\"",
       "if [ \"$STATUS\" = \"completed\" ]; then",
@@ -4375,6 +5261,102 @@ const server = http.createServer(async (req, res) => {
       json(res, 200, { ok: true, diagnostics });
     } catch (error) {
       json(res, 500, {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/context/live") {
+    try {
+      const context = await collectLiveContextWithFallback();
+      json(res, 200, {
+        ok: true,
+        context
+      });
+    } catch (error) {
+      json(res, 200, {
+        ok: true,
+        context: {
+          timestamp: new Date().toISOString(),
+          host: {
+            hostname: os.hostname(),
+            user: process.env.USER || process.env.LOGNAME || "unknown"
+          },
+          session: {
+            id: "",
+            name: process.env.USER || process.env.LOGNAME || "unknown",
+            display: process.env.DISPLAY || "",
+            type: process.env.XDG_SESSION_TYPE || "unknown",
+            state: "unknown",
+            remote: false,
+            desktop: "",
+            hasGuiAccess: Boolean(process.env.DISPLAY),
+            summary: "Desktop context collection failed, using fallback"
+          },
+          window: {
+            id: "",
+            title: "",
+            className: "",
+            source: "fallback",
+            available: false
+          },
+          clipboard: {
+            available: false,
+            source: "unavailable",
+            preview: "",
+            length: 0,
+            truncated: false
+          },
+          capabilities: {
+            xdotool: false,
+            xclip: false,
+            xsel: false,
+            wlPaste: false
+          },
+          signals: [],
+          notes: [
+            error instanceof Error ? error.message : String(error),
+            "已降级为最小上下文返回。"
+          ],
+          summary: "session=unknown | window=unavailable | clipboard=unavailable"
+        }
+      });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/agent-teams/run") {
+    try {
+      const body = await readJsonBody(req);
+      const scene =
+        typeof body.scene === "string"
+          ? body.scene
+          : typeof body.scenario === "string"
+            ? body.scenario
+            : "";
+      const prompt =
+        typeof body.prompt === "string"
+          ? body.prompt
+          : typeof body.input === "string"
+            ? body.input
+            : "";
+      const context =
+        body.context && typeof body.context === "object" ? body.context : null;
+      const clipboardText =
+        typeof body.clipboardText === "string" ? body.clipboardText : "";
+      const result = await runAgentTeams(scene, prompt, {
+        context,
+        clipboardText
+      });
+      json(res, 200, {
+        ok: true,
+        context: result.context,
+        result
+      });
+    } catch (error) {
+      json(res, 400, {
         ok: false,
         error: error instanceof Error ? error.message : String(error)
       });
