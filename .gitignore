@@ -2,4 +2,6 @@ node_modules/
 dist/
 dist-desktop/
 artifacts/
+build/
+*.user
 npm-debug.log*
