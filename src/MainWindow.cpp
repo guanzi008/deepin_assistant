@@ -62,12 +62,12 @@ QFrame *createCard(const QString &title) {
   auto *card = new QFrame;
   card->setObjectName(QStringLiteral("Card"));
   auto *layout = new QVBoxLayout(card);
-  layout->setContentsMargins(20, 18, 20, 18);
-  layout->setSpacing(14);
+  layout->setContentsMargins(14, 12, 14, 12);
+  layout->setSpacing(10);
 
   auto *label = new QLabel(title);
   label->setObjectName(QStringLiteral("CardTitle"));
-  label->setMinimumHeight(24);
+  label->setMinimumHeight(20);
   layout->addWidget(label);
   return card;
 }
@@ -91,18 +91,18 @@ QWidget *createNavItemWidget(const QString &badge,
   frame->setProperty("selected", false);
 
   auto *layout = new QHBoxLayout(frame);
-  layout->setContentsMargins(14, 12, 14, 12);
-  layout->setSpacing(12);
+  layout->setContentsMargins(10, 9, 10, 9);
+  layout->setSpacing(10);
 
   auto *badgeLabel = new QLabel(badge);
   badgeLabel->setObjectName(QStringLiteral("NavItemBadge"));
   badgeLabel->setAlignment(Qt::AlignCenter);
-  badgeLabel->setFixedSize(42, 42);
+  badgeLabel->setFixedSize(34, 34);
   layout->addWidget(badgeLabel, 0, Qt::AlignTop);
 
   auto *textLayout = new QVBoxLayout;
   textLayout->setContentsMargins(0, 0, 0, 0);
-  textLayout->setSpacing(4);
+  textLayout->setSpacing(2);
 
   auto *titleLabel = new QLabel(title);
   titleLabel->setObjectName(QStringLiteral("NavItemTitle"));
@@ -124,8 +124,8 @@ QPushButton *createHeaderActionButton(const QString &title, bool primary = false
   button->setObjectName(primary ? QStringLiteral("HeaderActionPrimary")
                                 : QStringLiteral("HeaderAction"));
   button->setCursor(Qt::PointingHandCursor);
-  button->setMinimumHeight(40);
-  button->setMinimumWidth(primary ? 104 : 92);
+  button->setMinimumHeight(34);
+  button->setMinimumWidth(primary ? 90 : 78);
   return button;
 }
 
@@ -133,7 +133,7 @@ QPushButton *createQuickActionButton(const QString &title, const QString &desc) 
   auto *button = new QPushButton(QStringLiteral("%1\n%2").arg(title, desc));
   button->setObjectName(QStringLiteral("QuickActionButton"));
   button->setCursor(Qt::PointingHandCursor);
-  button->setMinimumHeight(92);
+  button->setMinimumHeight(72);
   return button;
 }
 
@@ -359,8 +359,8 @@ MainWindow::MainWindow(const QString &artifactsDir, QWidget *parent)
 
 void MainWindow::buildUi() {
   setWindowTitle(QStringLiteral("Orbit Deepin Assistant"));
-  setMinimumSize(760, 880);
-  resize(860, 960);
+  setMinimumSize(720, 820);
+  resize(800, 920);
 
   auto *root = new QWidget;
   root->setObjectName(QStringLiteral("ShellRoot"));
@@ -369,7 +369,7 @@ void MainWindow::buildUi() {
   rootLayout->setSpacing(0);
 
   m_navList = new QListWidget;
-  m_navList->setFixedWidth(156);
+  m_navList->setFixedWidth(144);
   m_navList->setCurrentRow(0);
   m_navList->setObjectName(QStringLiteral("NavList"));
   const QList<QPair<QString, QString>> navItems = {
@@ -380,7 +380,7 @@ void MainWindow::buildUi() {
       {QStringLiteral("资料中心"), QString()}};
   for (int index = 0; index < navItems.size(); ++index) {
     auto *item = new QListWidgetItem(m_navList);
-    item->setSizeHint(QSize(0, 70));
+    item->setSizeHint(QSize(0, 58));
     m_navList->setItemWidget(
         item,
         createNavItemWidget(QStringLiteral("%1").arg(index + 1, 2, 10, QChar('0')),
@@ -392,19 +392,19 @@ void MainWindow::buildUi() {
   auto *mainArea = new QWidget;
   mainArea->setObjectName(QStringLiteral("MainArea"));
   auto *mainLayout = new QVBoxLayout(mainArea);
-  mainLayout->setContentsMargins(18, 18, 18, 18);
-  mainLayout->setSpacing(14);
+  mainLayout->setContentsMargins(14, 14, 14, 14);
+  mainLayout->setSpacing(12);
 
   auto *header = new QFrame;
   header->setObjectName(QStringLiteral("HeaderBar"));
   auto *headerLayout = new QVBoxLayout(header);
-  headerLayout->setContentsMargins(18, 18, 18, 18);
-  headerLayout->setSpacing(12);
+  headerLayout->setContentsMargins(14, 12, 14, 12);
+  headerLayout->setSpacing(10);
 
   auto *headerTopRow = new QHBoxLayout;
-  headerTopRow->setSpacing(12);
+  headerTopRow->setSpacing(10);
   auto *titleWrap = new QVBoxLayout;
-  titleWrap->setSpacing(4);
+  titleWrap->setSpacing(2);
   auto *title = new QLabel(QStringLiteral("Orbit Deepin Assistant"));
   title->setObjectName(QStringLiteral("WindowTitle"));
   m_runtimeLabel = new QLabel(QStringLiteral("桌面助手已就绪，可直接整理邮件或处理系统问题。"));
@@ -471,7 +471,7 @@ void MainWindow::buildUi() {
   setStyleSheet(QStringLiteral(R"(
     QWidget {
       color: #d9e6f2;
-      font-size: 14px;
+      font-size: 13px;
     }
     QMainWindow, QWidget#ShellRoot, QWidget#MainArea, QWidget#PageRoot, QScrollArea#PageScroll {
       background: #07111d;
@@ -482,21 +482,21 @@ void MainWindow::buildUi() {
     #HeaderBar, #Card, QFrame#ArtifactPreviewPanel {
       background: #0d1724;
       border: 1px solid #17314b;
-      border-radius: 18px;
+      border-radius: 14px;
     }
     #WindowTitle {
-      font-size: 24px;
+      font-size: 20px;
       font-weight: 700;
       color: #f6fbff;
     }
     #RuntimeHint {
       color: #87a8c4;
-      font-size: 13px;
+      font-size: 12px;
     }
     #CardTitle {
       color: #b7dfff;
       font-weight: 700;
-      font-size: 16px;
+      font-size: 14px;
     }
     #MetricValue {
       color: #edf6ff;
@@ -504,22 +504,22 @@ void MainWindow::buildUi() {
     }
     #MetricCompact {
       color: #9fbdd7;
-      font-size: 13px;
+      font-size: 12px;
     }
     QListWidget#NavList {
       background: #08111a;
       border: none;
-      padding-top: 18px;
+      padding-top: 12px;
       outline: 0;
     }
     QListWidget#NavList::item {
-      margin: 6px 10px;
+      margin: 4px 8px;
       padding: 0;
     }
     QFrame#NavItem {
       background: #0a1622;
       border: 1px solid #142b40;
-      border-radius: 16px;
+      border-radius: 12px;
     }
     QFrame#NavItem[selected="true"] {
       background: #102133;
@@ -527,10 +527,10 @@ void MainWindow::buildUi() {
     }
     QLabel#NavItemBadge {
       background: #102437;
-      border-radius: 21px;
+      border-radius: 17px;
       color: #9dddf0;
       font-weight: 700;
-      font-size: 15px;
+      font-size: 13px;
     }
     QFrame#NavItem[selected="true"] QLabel#NavItemBadge {
       background: #1f5f8d;
@@ -539,11 +539,11 @@ void MainWindow::buildUi() {
     QLabel#NavItemTitle {
       color: #eef7ff;
       font-weight: 700;
-      font-size: 17px;
+      font-size: 14px;
     }
     QLabel#NavItemDesc {
       color: #87a7c2;
-      font-size: 12px;
+      font-size: 11px;
     }
     QFrame#NavItem[selected="true"] QLabel#NavItemDesc {
       color: #d7e9f7;
@@ -551,9 +551,9 @@ void MainWindow::buildUi() {
     QPushButton {
       background: #12263a;
       border: 1px solid #254763;
-      border-radius: 12px;
-      min-height: 42px;
-      padding: 0 16px;
+      border-radius: 10px;
+      min-height: 36px;
+      padding: 0 12px;
       color: #f5fbff;
     }
     QPushButton:hover {
@@ -570,10 +570,10 @@ void MainWindow::buildUi() {
     QToolButton#HeaderMenuButton {
       background: #12263a;
       border: 1px solid #254763;
-      border-radius: 12px;
-      min-height: 42px;
-      min-width: 88px;
-      padding: 0 16px;
+      border-radius: 10px;
+      min-height: 36px;
+      min-width: 76px;
+      padding: 0 12px;
       color: #f5fbff;
     }
     QToolButton#HeaderMenuButton:hover {
@@ -583,11 +583,11 @@ void MainWindow::buildUi() {
     QPushButton#QuickActionButton {
       background: #0c1b2a;
       border: 1px solid #22425f;
-      border-radius: 16px;
-      min-height: 96px;
-      padding: 16px 18px;
+      border-radius: 12px;
+      min-height: 72px;
+      padding: 10px 12px;
       text-align: left;
-      font-size: 15px;
+      font-size: 13px;
       font-weight: 600;
     }
     QPushButton#QuickActionButton:hover {
@@ -597,22 +597,22 @@ void MainWindow::buildUi() {
     QComboBox, QLineEdit, QPlainTextEdit, QTextEdit, QListWidget {
       background: #091521;
       border: 1px solid #17314a;
-      border-radius: 12px;
+      border-radius: 10px;
     }
     QComboBox, QLineEdit, QPlainTextEdit {
-      min-height: 42px;
-      padding: 0 12px;
+      min-height: 36px;
+      padding: 0 10px;
     }
     QTextEdit, QPlainTextEdit, QListWidget {
-      padding: 10px 12px;
+      padding: 8px 10px;
     }
     QListWidget {
       outline: 0;
     }
     QListWidget::item {
-      min-height: 34px;
-      padding: 6px 4px;
-      border-radius: 10px;
+      min-height: 28px;
+      padding: 4px 3px;
+      border-radius: 8px;
     }
     QListWidget::item:selected {
       background: #11263a;
@@ -626,23 +626,23 @@ void MainWindow::buildUi() {
     }
     QLabel#ArtifactPreviewTitle {
       color: #dceeff;
-      font-size: 14px;
+      font-size: 13px;
       font-weight: 700;
     }
     QLabel#ArtifactPreviewImage {
       background: #091522;
       border: 1px solid #17314a;
-      border-radius: 12px;
-      padding: 6px;
+      border-radius: 10px;
+      padding: 4px;
     }
     QMenu {
       background: #0d1724;
       border: 1px solid #17314b;
-      padding: 8px;
+      padding: 6px;
     }
     QMenu::item {
-      padding: 8px 18px;
-      border-radius: 8px;
+      padding: 6px 14px;
+      border-radius: 6px;
     }
     QMenu::item:selected {
       background: #173b59;
@@ -654,7 +654,7 @@ QWidget *MainWindow::buildOverviewPage() {
   auto *page = new QWidget;
   auto *layout = new QVBoxLayout(page);
   layout->setContentsMargins(0, 0, 0, 8);
-  layout->setSpacing(14);
+  layout->setSpacing(12);
 
   auto *quickCard = createCard(QStringLiteral("快捷入口"));
   auto *quickLayout = qobject_cast<QVBoxLayout *>(quickCard->layout());
@@ -667,7 +667,7 @@ QWidget *MainWindow::buildOverviewPage() {
   quickGrid->setVerticalSpacing(12);
 
   auto *mailButton = createQuickActionButton(QStringLiteral("整理一封邮件"),
-                                             QStringLiteral("采集当前窗口和剪贴板，直接起草"));
+                                             QStringLiteral("采集上下文并直接起草"));
   connect(mailButton, &QPushButton::clicked, this, [this]() {
     if (m_navList) {
       m_navList->setCurrentRow(1);
@@ -678,21 +678,21 @@ QWidget *MainWindow::buildOverviewPage() {
   quickGrid->addWidget(mailButton, 0, 0);
 
   auto *printerButton = createQuickActionButton(QStringLiteral("刷新本机状态"),
-                                                QStringLiteral("重新采集系统、打印、网络和音频状态"));
+                                                QStringLiteral("重新采集系统和设备状态"));
   connect(printerButton, &QPushButton::clicked, this, [this]() {
     refreshSnapshot();
   });
   quickGrid->addWidget(printerButton, 0, 1);
 
   auto *generalButton = createQuickActionButton(QStringLiteral("导出诊断工单"),
-                                                QStringLiteral("把当前判断、阶段和命令整理成一份材料"));
+                                                QStringLiteral("把当前判断整理成一份材料"));
   connect(generalButton, &QPushButton::clicked, this, [this]() {
     runAction(QStringLiteral("export-workorder"));
   });
   quickGrid->addWidget(generalButton, 1, 0);
 
   auto *historyButton = createQuickActionButton(QStringLiteral("打开资料中心"),
-                                                QStringLiteral("查看工单、脚本、日志、草稿和截图"));
+                                                QStringLiteral("查看脚本、日志和导出材料"));
   connect(historyButton, &QPushButton::clicked, this, [this]() {
     if (m_navList) {
       m_navList->setCurrentRow(4);
@@ -734,7 +734,7 @@ QWidget *MainWindow::buildOverviewPage() {
   auto *summaryCard = createCard(QStringLiteral("当前判断"));
   auto *summaryLayout = qobject_cast<QVBoxLayout *>(summaryCard->layout());
   m_planTitleLabel = createValueLabel();
-  m_planTitleLabel->setStyleSheet(QStringLiteral("font-size: 18px; font-weight: 700; color: #f7fcff;"));
+  m_planTitleLabel->setStyleSheet(QStringLiteral("font-size: 16px; font-weight: 700; color: #f7fcff;"));
   m_riskLabel = createValueLabel(true);
   m_planSummaryLabel = createValueLabel();
   summaryLayout->addWidget(m_planTitleLabel);
@@ -769,7 +769,7 @@ QWidget *MainWindow::buildOverviewPage() {
   actionsLayout->addWidget(m_recommendedActionList);
   m_actionPreviewView = new QTextEdit;
   m_actionPreviewView->setReadOnly(true);
-  m_actionPreviewView->setMinimumHeight(140);
+  m_actionPreviewView->setMinimumHeight(112);
   actionsLayout->addWidget(m_actionPreviewView);
   layout->addWidget(actionsCard, 1);
 
@@ -781,7 +781,7 @@ QWidget *MainWindow::buildMailPage() {
   auto *page = new QWidget;
   auto *layout = new QVBoxLayout(page);
   layout->setContentsMargins(0, 0, 0, 8);
-  layout->setSpacing(14);
+  layout->setSpacing(12);
 
   auto *intentCard = createCard(QStringLiteral("邮件整理"));
   auto *intentLayout = qobject_cast<QVBoxLayout *>(intentCard->layout());
@@ -876,7 +876,7 @@ QWidget *MainWindow::buildMailPage() {
 
   m_mailBodyEdit = new QTextEdit;
   m_mailBodyEdit->setPlaceholderText(QStringLiteral("邮件正文会根据上下文自动整理。"));
-  m_mailBodyEdit->setMinimumHeight(180);
+  m_mailBodyEdit->setMinimumHeight(150);
   draftLayout->addWidget(m_mailBodyEdit);
 
   m_mailDraftHintLabel = createValueLabel(true);
@@ -887,7 +887,7 @@ QWidget *MainWindow::buildMailPage() {
 
   m_mailPreviewEdit = new QTextEdit;
   m_mailPreviewEdit->setReadOnly(true);
-  m_mailPreviewEdit->setMinimumHeight(140);
+  m_mailPreviewEdit->setMinimumHeight(118);
   draftLayout->addWidget(m_mailPreviewEdit);
   layout->addWidget(draftCard, 1);
 
@@ -922,7 +922,7 @@ QWidget *MainWindow::buildPrinterPage() {
   auto *page = new QWidget;
   auto *layout = new QVBoxLayout(page);
   layout->setContentsMargins(0, 0, 0, 8);
-  layout->setSpacing(14);
+  layout->setSpacing(12);
 
   auto *statusCard = createCard(QStringLiteral("打印链路状态"));
   auto *statusLayout = qobject_cast<QVBoxLayout *>(statusCard->layout());
@@ -971,7 +971,7 @@ QWidget *MainWindow::buildGeneralPage() {
   auto *page = new QWidget;
   auto *layout = new QVBoxLayout(page);
   layout->setContentsMargins(0, 0, 0, 8);
-  layout->setSpacing(14);
+  layout->setSpacing(12);
 
   auto *systemCard = createCard(QStringLiteral("系统快照"));
   auto *systemLayout = qobject_cast<QVBoxLayout *>(systemCard->layout());
@@ -1016,13 +1016,13 @@ QWidget *MainWindow::buildHistoryPage() {
   auto *page = new QWidget;
   auto *layout = new QVBoxLayout(page);
   layout->setContentsMargins(0, 0, 0, 8);
-  layout->setSpacing(14);
+  layout->setSpacing(12);
 
   auto *logCard = createCard(QStringLiteral("执行日志"));
   auto *logLayout = qobject_cast<QVBoxLayout *>(logCard->layout());
   m_logView = new QTextEdit;
   m_logView->setReadOnly(true);
-  m_logView->setMinimumHeight(180);
+  m_logView->setMinimumHeight(150);
   logLayout->addWidget(m_logView);
   layout->addWidget(logCard, 1);
 
@@ -1074,7 +1074,7 @@ QWidget *MainWindow::buildHistoryPage() {
   m_artifactPreviewImageLabel = new QLabel;
   m_artifactPreviewImageLabel->setObjectName(QStringLiteral("ArtifactPreviewImage"));
   m_artifactPreviewImageLabel->setAlignment(Qt::AlignCenter);
-  m_artifactPreviewImageLabel->setMinimumHeight(168);
+  m_artifactPreviewImageLabel->setMinimumHeight(132);
   m_artifactPreviewImageLabel->hide();
   previewLayout->addWidget(m_artifactPreviewImageLabel);
   m_artifactPreviewView = new QTextEdit;
@@ -1149,8 +1149,8 @@ void MainWindow::positionOnPrimaryScreen() {
   }
 
   const QRect workArea = QGuiApplication::primaryScreen()->availableGeometry();
-  const int width = qMin(880, qMax(780, workArea.width() / 2));
-  const int height = qMin(980, qMax(880, workArea.height() - 40));
+  const int width = qMin(820, qMax(740, workArea.width() / 2));
+  const int height = qMin(940, qMax(820, workArea.height() - 36));
   const int x = workArea.x() + workArea.width() - width - 18;
   const int y = workArea.y() + (workArea.height() - height) / 2;
   setGeometry(x, y, width, height);
